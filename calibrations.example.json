@@ -1,0 +1,11 @@
+{
+  "_source": "Example only (fake vehicles). Copy to calibrations.json and put your own tank tables in it: the tank calibration of each vehicle from the GPS server's object settings (sensor on param io9). x = sensor mV, y = litres, piecewise-linear. calibrations.json is private and never published.",
+  "tables": {
+    "tank480L_example": [[0, 0], [800, 40], [1590, 80], [2320, 120], [3070, 160], [3790, 200], [4500, 240], [5230, 280], [5920, 320], [6640, 360], [7390, 400], [8120, 440], [8920, 480]],
+    "tank600L_example": [[0, 0], [1000, 100], [2000, 200], [3000, 300], [4000, 400], [5000, 500], [6000, 600]]
+  },
+  "vehicles": {
+    "000000000000001": { "name": "Example truck 1", "table": "tank480L_example" },
+    "000000000000002": { "name": "Example truck 2", "table": "tank600L_example" }
+  }
+}

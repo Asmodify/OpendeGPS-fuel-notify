@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Fuel Tank Warner</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231c5cab'/%3E%3Cpath d='M16 6s-7 7.6-7 12.6a7 7 0 0 0 14 0C23 13.6 16 6 16 6z' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==" crossorigin="anonymous" referrerpolicy="no-referrer">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Apply a saved theme choice before first paint (auto = follow the OS).
+    try { var t = JSON.parse(localStorage.getItem('ftw.theme') || 'null'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+  </script>
+</head>
+<body>
+  <!-- Icon sprite -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-truck" viewBox="0 0 24 24"><path d="M2 6.5h12v10H2zM14 9.5h4.2l3.3 3.6v3.4H14"/><circle cx="6.5" cy="17.5" r="1.9"/><circle cx="17.5" cy="17.5" r="1.9"/></symbol>
+      <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4 3 6.2v14L9 18l6 2.2 6-2.2v-14L15 6.2 9 4zM9 4v14M15 6.2v14"/></symbol>
+      <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8.5 2.5 8.5h-17S6 15.5 6 9"/><path d="M10.2 20.5a2 2 0 0 0 3.6 0"/></symbol>
+      <symbol id="i-bell-off" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8.5 2.5 8.5h-17S6 15.5 6 9"/><path d="M10.2 20.5a2 2 0 0 0 3.6 0M3 3l18 18"/></symbol>
+      <symbol id="i-report" viewBox="0 0 24 24"><path d="M3.5 3.5v17h17"/><path d="M8 16v-3M12 16V9M16 16v-5M20 16V6"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+      <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></symbol>
+      <symbol id="i-volume-off" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24"><path d="M21.5 2.5 10.5 13.5M21.5 2.5l-7 19-4-8-8-4 19-7z"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></symbol>
+      <symbol id="i-check-all" viewBox="0 0 24 24"><path d="M2 12.5l4.5 4.5L15.5 8M11.5 16l1 1L22 7.5"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.6-4.4L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.6 4.4l1.4-1.9M20 20v-4.5h-4.5"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M4 20h16"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.3-4.3"/></symbol>
+      <symbol id="i-octagon" viewBox="0 0 24 24"><path d="M8.2 2.5h7.6l5.7 5.7v7.6l-5.7 5.7H8.2l-5.7-5.7V8.2z"/><path d="M12 7.5v5.5M12 16.5h.01"/></symbol>
+      <symbol id="i-triangle" viewBox="0 0 24 24"><path d="M12 3.5 2 20.5h20L12 3.5z"/><path d="M12 10v4.5M12 17.5h.01"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5h.01"/></symbol>
+      <symbol id="i-expand" viewBox="0 0 24 24"><path d="M3.5 9V3.5H9M20.5 9V3.5H15M3.5 15v5.5H9M20.5 15v5.5H15"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21.5s-7-6.2-7-12a7 7 0 0 1 14 0c0 5.8-7 12-7 12z"/><circle cx="12" cy="9.5" r="2.5"/></symbol>
+      <symbol id="i-fuel" viewBox="0 0 24 24"><path d="M4 21V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v16M3 21h13M4 10h11"/><path d="M15 8h2a2 2 0 0 1 2 2v6.5a1.5 1.5 0 0 0 3 0V9l-3-3"/></symbol>
+      <symbol id="i-drop-down" viewBox="0 0 24 24"><path d="M12 2.5s-6.5 7-6.5 11.8a6.5 6.5 0 0 0 13 0C18.5 9.5 12 2.5 12 2.5z"/><path d="M12 10v6.5M9.3 13.8 12 16.5l2.7-2.7"/></symbol>
+      <symbol id="i-drop-up" viewBox="0 0 24 24"><path d="M12 2.5s-6.5 7-6.5 11.8a6.5 6.5 0 0 0 13 0C18.5 9.5 12 2.5 12 2.5z"/><path d="M12 17V10.5M9.3 13.2 12 10.5l2.7 2.7"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12l1-8z"/></symbol>
+      <symbol id="i-bolt-off" viewBox="0 0 24 24"><path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12l1-8z"/><path d="M3 3l18 18"/></symbol>
+      <symbol id="i-sensor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.5"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></symbol>
+      <symbol id="i-sensor-off" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.5"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2M3 3l18 18"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 2"/></symbol>
+      <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M3.3 18.5a10 10 0 1 1 17.4 0"/><path d="M12 14.5l4.5-5"/><circle cx="12" cy="14.5" r="1.2"/></symbol>
+      <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.3a5 5 0 0 1 7 0M12 20h.01"/></symbol>
+      <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.3a5 5 0 0 1 7 0M12 20h.01M3 3l18 18"/></symbol>
+      <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5z"/></symbol>
+      <symbol id="i-mute" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8.5 2.5 8.5h-17S6 15.5 6 9"/><path d="M10.2 20.5a2 2 0 0 0 3.6 0M3 3l18 18"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+      <symbol id="i-sort" viewBox="0 0 24 24"><path d="M8 9l4-4 4 4M8 15l4 4 4-4"/></symbol>
+      <symbol id="i-sheet" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 9h17M3.5 14.5h17M9.5 9v11.5"/></symbol>
+      <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M9 16l-4-4 4-4M5 12h10"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4.2l2 2.5H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="topbar">
+    <a class="brand" href="#/fleet" aria-label="Fuel Tank Warner home">
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3s-6.5 7-6.5 11.6a6.5 6.5 0 0 0 13 0C18.5 10 12 3 12 3z"/></svg></span>
+      <span class="brand-text">Fuel Tank Warner</span>
+    </a>
+    <nav class="tabs" aria-label="Views">
+      <a href="#/fleet" data-view="fleet"><svg class="ic"><use href="#i-truck"/></svg><span>Fleet</span></a>
+      <a href="#/map" data-view="map"><svg class="ic"><use href="#i-map"/></svg><span>Map</span></a>
+      <a href="#/alerts" data-view="alerts"><svg class="ic"><use href="#i-bell"/></svg><span>Alerts</span><b class="tab-badge" id="tab-badge" hidden></b></a>
+      <a href="#/report" data-view="report"><svg class="ic"><use href="#i-report"/></svg><span>Report</span></a>
+      <a href="#/settings" data-view="settings"><svg class="ic"><use href="#i-sliders"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="top-right">
+      <div class="conn" id="conn" data-state="connecting" title="Connection to the Fuel Tank Warner server">
+        <i class="dot" aria-hidden="true"></i><span id="conn-text">Connecting…</span>
+      </div>
+      <button class="count crit zero" id="cnt-crit" type="button" title="Unacknowledged critical alerts">
+        <svg class="ic"><use href="#i-octagon"/></svg><b>0</b><span class="count-lab">critical</span>
+      </button>
+      <button class="count warn zero" id="cnt-warn" type="button" title="Unacknowledged warnings">
+        <svg class="ic"><use href="#i-triangle"/></svg><b>0</b><span class="count-lab">warnings</span>
+      </button>
+      <button class="icon-btn" id="btn-notif" type="button" title="Browser pop-up notifications"><svg class="ic"><use href="#i-bell-off"/></svg></button>
+      <button class="icon-btn" id="btn-sound" type="button" title="Alarm sound for critical alerts"><svg class="ic"><use href="#i-volume"/></svg></button>
+      <button class="icon-btn" id="btn-test" type="button" title="Send a test notification"><svg class="ic"><use href="#i-send"/></svg></button>
+      <button class="icon-btn cloud-only" id="btn-logout" type="button" title="Sign out" aria-label="Sign out"><svg class="ic"><use href="#i-logout"/></svg></button>
+    </div>
+  </header>
+
+  <div id="banners" class="banners" aria-live="polite"></div>
+
+  <main id="main">
+    <!-- FLEET -->
+    <section class="view" id="view-fleet" hidden aria-label="Fleet">
+      <div class="tiles" id="fleet-tiles"></div>
+      <div class="filters">
+        <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="f-q" type="search" placeholder="Search name, plate, IMEI…" autocomplete="off" aria-label="Search vehicles"></label>
+        <select id="f-group" aria-label="Group"><option value="">All groups</option></select>
+        <select id="f-status" aria-label="Status">
+          <option value="">Any status</option>
+          <option value="moving">Moving</option>
+          <option value="idle">Idle (engine on)</option>
+          <option value="parked">Parked</option>
+          <option value="offline">Offline</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="f-fuel"> Fuel sensor</label>
+        <label class="chk"><input type="checkbox" id="f-problems"> Only with problems</label>
+        <span class="filter-count" id="f-count"></span>
+      </div>
+      <div class="card table-card">
+        <table class="tbl fleet-tbl">
+          <thead>
+            <tr>
+              <th class="c-name"><button type="button" data-sort="name">Vehicle</button></th>
+              <th class="c-group"><button type="button" data-sort="group">Group</button></th>
+              <th class="c-status"><button type="button" data-sort="status">Status</button></th>
+              <th class="c-fuel"><button type="button" data-sort="fuel">Fuel</button></th>
+              <th class="c-speed num"><button type="button" data-sort="speed">Speed</button></th>
+              <th class="c-seen"><button type="button" data-sort="seen">Last report</button></th>
+              <th class="c-alerts"><button type="button" data-sort="alerts">Alerts</button></th>
+            </tr>
+          </thead>
+          <tbody id="fleet-body"></tbody>
+        </table>
+        <div class="empty-state" id="fleet-empty" hidden></div>
+      </div>
+    </section>
+
+    <!-- MAP -->
+    <section class="view" id="view-map" hidden aria-label="Map">
+      <div class="map-wrap card">
+        <div id="map" class="map"></div>
+        <div class="map-tools">
+          <div class="seg" id="map-filter" role="group" aria-label="Show on map">
+            <button type="button" data-f="all" aria-pressed="true">All</button>
+            <button type="button" data-f="problems" aria-pressed="false">Problems</button>
+            <button type="button" data-f="moving" aria-pressed="false">Moving</button>
+            <button type="button" data-f="idle" aria-pressed="false">Idle</button>
+            <button type="button" data-f="parked" aria-pressed="false">Parked</button>
+            <button type="button" data-f="offline" aria-pressed="false">Offline</button>
+          </div>
+          <label class="chk map-chk"><input type="checkbox" id="map-names"> Names</label>
+          <button type="button" class="btn small" id="map-fit"><svg class="ic"><use href="#i-expand"/></svg>Fit all</button>
+        </div>
+        <div class="map-legend" aria-label="Legend">
+          <span><i class="mk-dot moving"></i>Moving</span>
+          <span><i class="mk-dot idle"></i>Idle</span>
+          <span><i class="mk-dot parked"></i>Parked</span>
+          <span><i class="mk-dot offline"></i>Offline</span>
+          <span><i class="mk-dot ring-critical"></i>Critical alert</span>
+          <span><i class="mk-dot ring-warning"></i>Warning</span>
+        </div>
+        <div class="map-error" id="map-error" hidden></div>
+      </div>
+    </section>
+
+    <!-- ALERTS -->
+    <section class="view" id="view-alerts" hidden aria-label="Alerts">
+      <div class="filters">
+        <div class="seg" id="a-sev" role="group" aria-label="Severity">
+          <button type="button" data-sev="critical" aria-pressed="true"><i class="sdot critical"></i>Critical</button>
+          <button type="button" data-sev="warning" aria-pressed="true"><i class="sdot warning"></i>Warning</button>
+          <button type="button" data-sev="info" aria-pressed="true"><i class="sdot info"></i>Info</button>
+        </div>
+        <select id="a-type" aria-label="Alert type"><option value="">All types</option></select>
+        <select id="a-veh" aria-label="Vehicle"><option value="">All vehicles</option></select>
+        <select id="a-range" aria-label="Time range">
+          <option value="24">Last 24 hours</option>
+          <option value="72">Last 3 days</option>
+          <option value="168">Last 7 days</option>
+          <option value="720">Last 30 days</option>
+          <option value="2160">Last 90 days</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="a-unacked"> Unacknowledged only</label>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="a-refresh" title="Reload"><svg class="ic"><use href="#i-refresh"/></svg><span class="hide-sm">Refresh</span></button>
+        <button type="button" class="btn" id="a-ackall"><svg class="ic"><use href="#i-check-all"/></svg>Acknowledge all</button>
+      </div>
+      <div id="a-temp" class="temp-view" role="status" hidden></div>
+      <div id="alert-list" class="alert-list"></div>
+      <div class="more-row"><button type="button" class="btn" id="a-more" hidden>Load older alerts</button></div>
+    </section>
+
+    <!-- REPORT -->
+    <section class="view" id="view-report" hidden aria-label="Report">
+      <div class="filters">
+        <div class="seg" id="r-period" role="group" aria-label="Period">
+          <button type="button" data-h="24" aria-pressed="true">Last 24 hours</button>
+          <button type="button" data-h="168" aria-pressed="false">Last 7 days</button>
+        </div>
+        <select id="r-group" aria-label="Group"><option value="">All groups</option></select>
+        <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="r-q" type="search" placeholder="Search vehicle…" autocomplete="off" aria-label="Search vehicles"></label>
+        <label class="chk"><input type="checkbox" id="r-fuel" checked> Fuel sensor only</label>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="r-refresh" title="Reload"><svg class="ic"><use href="#i-refresh"/></svg><span class="hide-sm">Refresh</span></button>
+        <button type="button" class="btn" id="r-csv"><svg class="ic"><use href="#i-download"/></svg>Export CSV</button>
+      </div>
+      <div class="card excel-card" id="r-excel" aria-labelledby="r-excel-title">
+        <span class="excel-ico" aria-hidden="true"><svg class="ic"><use href="#i-sheet"/></svg></span>
+        <div class="excel-main">
+          <b id="r-excel-title">Excel fuel ledger</b> <span class="muted">— every refuel and suspected fuel theft since the program started watching</span>
+          <div class="excel-status" id="r-excel-status" role="status">Loading…</div>
+        </div>
+        <div class="excel-actions">
+          <a class="btn primary" id="r-xlsx" href="/api/export/fuel-events.xlsx" download><svg class="ic"><use href="#i-download"/></svg>Download Excel</a>
+          <button type="button" class="btn local-only" id="r-excel-folder" hidden><svg class="ic"><use href="#i-folder"/></svg>Open folder</button>
+        </div>
+      </div>
+      <div class="tiles report-tiles" id="r-tiles"></div>
+      <div class="card table-card">
+        <table class="tbl report-tbl">
+          <thead>
+            <tr>
+              <th class="c-name"><button type="button" data-sort="name">Vehicle</button></th>
+              <th class="c-group"><button type="button" data-sort="group">Group</button></th>
+              <th class="num"><button type="button" data-sort="distance">Distance</button></th>
+              <th class="num c-eng"><button type="button" data-sort="engine">Engine hours</button></th>
+              <th class="num"><button type="button" data-sort="used">Fuel used</button></th>
+              <th class="num c-rate"><button type="button" data-sort="rate">Per 100 km</button></th>
+              <th class="num c-refuel"><button type="button" data-sort="refuel">Refuelled</button></th>
+              <th class="num"><button type="button" data-sort="drain">Suspected loss</button></th>
+              <th class="c-ralerts"><button type="button" data-sort="alerts">Alerts</button></th>
+            </tr>
+          </thead>
+          <tbody id="r-body"></tbody>
+        </table>
+        <div class="empty-state" id="r-empty" hidden></div>
+      </div>
+      <p class="note">Fuel figures use only settled readings taken while vehicles were parked, because readings jump around while driving. “Suspected loss” is the total of fuel-drain alerts. Litres are shown for vehicles with a tank size set in Settings; others show % of tank.</p>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" id="view-settings" hidden aria-label="Settings">
+      <div class="settings-grid">
+        <form class="card pad" id="s-rules" novalidate>
+          <h2>Alert rules</h2>
+          <p class="lead">When should the system warn you? These apply to every vehicle unless a vehicle has its own rules (open a vehicle → Settings). Changes take effect immediately.</p>
+          <div id="s-rules-fields"><p class="muted">Loading…</p></div>
+          <div class="form-actions sticky-actions">
+            <button type="submit" class="btn primary">Save rules</button>
+            <button type="button" class="btn" id="s-rules-reset">Undo changes</button>
+            <span class="save-state" id="s-rules-state" role="status"></span>
+          </div>
+        </form>
+
+        <div class="settings-col">
+          <form class="card pad local-only" id="s-notify" novalidate>
+            <h2>Notifications from the server</h2>
+            <p class="lead">Sent by the program running on this computer, even when no browser is open. Historical alerts (found while catching up on old data) are never sent.</p>
+            <label class="switch"><input type="checkbox" name="windowsToast"><span>Windows desktop pop-ups</span></label>
+            <fieldset class="sev-fieldset">
+              <legend>Send for</legend>
+              <label class="chk"><input type="checkbox" name="sev" value="critical"> Critical</label>
+              <label class="chk"><input type="checkbox" name="sev" value="warning"> Warnings</label>
+              <label class="chk"><input type="checkbox" name="sev" value="info"> Info (refuels, back online…)</label>
+            </fieldset>
+            <div class="form-actions">
+              <button type="submit" class="btn primary">Save notifications</button>
+              <button type="button" class="btn" id="s-test"><svg class="ic"><use href="#i-send"/></svg>Send test</button>
+              <span class="save-state" id="s-notify-state" role="status"></span>
+            </div>
+          </form>
+
+          <div class="card pad" id="s-browser">
+            <h2>This browser</h2>
+            <p class="lead">Pop-ups and sound while this page is open. Saved only in this browser.</p>
+            <div class="row-between">
+              <div><b>Pop-up notifications</b><div class="help" id="s-perm"></div><div class="help" id="s-perm-note" hidden></div></div>
+              <button type="button" class="btn" id="s-perm-btn">Enable</button>
+            </div>
+            <label class="switch"><input type="checkbox" id="s-sound"><span>Alarm sound for critical alerts</span></label>
+            <button type="button" class="btn small" id="s-sound-test"><svg class="ic"><use href="#i-volume"/></svg>Play sound</button>
+            <fieldset class="sev-fieldset">
+              <legend>Pop up for</legend>
+              <label class="chk"><input type="checkbox" name="bsev" value="critical"> Critical</label>
+              <label class="chk"><input type="checkbox" name="bsev" value="warning"> Warnings</label>
+              <label class="chk"><input type="checkbox" name="bsev" value="info"> Info</label>
+            </fieldset>
+            <label class="field inline"><span>Theme</span>
+              <select id="s-theme"><option value="auto">Automatic</option><option value="light">Light</option><option value="dark">Dark</option></select>
+            </label>
+          </div>
+        </div>
+
+        <div class="card pad wide" id="s-vehicles">
+          <div class="row-between wrap">
+            <div>
+              <h2>Fuel sensor calibration &amp; mute</h2>
+              <p class="lead">Enter the sensor reading (mV) when the tank is empty and when it is full, and the tank size, to see litres instead of percent. Default 0 – 10 000 mV covers the whole sensor range. Muted vehicles still record alerts but send no notifications.</p>
+            </div>
+          </div>
+          <div class="filters compact">
+            <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="sv-q" type="search" placeholder="Search vehicle…" autocomplete="off" aria-label="Search vehicles"></label>
+            <label class="chk"><input type="checkbox" id="sv-all"> Include vehicles without fuel sensor</label>
+          </div>
+          <div class="table-scroll">
+            <table class="tbl cal-tbl">
+              <thead><tr><th>Vehicle</th><th class="num">Level now</th><th class="num">Empty (mV)</th><th class="num">Full (mV)</th><th class="num">Tank (L)</th><th>Mute</th><th>Own rules</th><th></th></tr></thead>
+              <tbody id="sv-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- VEHICLE DETAIL DRAWER -->
+  <div id="drawer" class="drawer" hidden>
+    <div class="drawer-scrim" data-close></div>
+    <section class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="d-title">
+      <header class="d-head">
+        <div class="d-titles">
+          <h2 id="d-title">Vehicle</h2>
+          <div class="d-sub" id="d-sub"></div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Close vehicle details" id="d-close"><svg class="ic"><use href="#i-x"/></svg></button>
+      </header>
+      <div class="d-body" id="d-body">
+        <div id="d-stats" class="d-stats"></div>
+        <div class="card d-chart-card">
+          <div class="d-chart-head">
+            <h3>Fuel level</h3>
+            <div class="seg small" id="d-range" role="group" aria-label="Chart period">
+              <button type="button" data-h="24" aria-pressed="true">24 h</button>
+              <button type="button" data-h="48" aria-pressed="false">48 h</button>
+              <button type="button" data-h="168" aria-pressed="false">7 days</button>
+            </div>
+            <button type="button" class="btn small" id="d-zoomreset" hidden><svg class="ic"><use href="#i-expand"/></svg>Show whole period</button>
+          </div>
+          <div class="legend" aria-label="Chart legend">
+            <span><i class="lg-level"></i>Trusted level (settled, parked)</span>
+            <span><i class="lg-raw"></i>Raw sensor reading</span>
+            <span><i class="lg-drain"></i>Fuel drain</span>
+            <span><i class="lg-refuel"></i>Refuel</span>
+            <span><i class="lg-nosig"></i>No sensor reading</span>
+            <span><i class="lg-ign"></i>Engine on</span>
+            <span><i class="lg-pwroff"></i>Power off</span>
+          </div>
+          <div id="d-chart" class="d-chart"><div class="chart-loading">Loading history…</div></div>
+          <p class="help chart-help">Readings jump while driving on rough roads, so the bold line only uses steady readings taken while parked. Drag across the chart to zoom in; double-click to zoom out.</p>
+          <details class="levels-table">
+            <summary>Show trusted readings as a table</summary>
+            <div id="d-levels"></div>
+          </details>
+        </div>
+        <div class="d-two">
+          <div class="card pad">
+            <div class="row-between"><h3>Alerts in this period</h3><a class="link" id="d-all-alerts" href="#/alerts">All alerts for this vehicle</a></div>
+            <div id="d-alerts" class="d-alerts"></div>
+          </div>
+          <div class="card d-map-card">
+            <div id="d-map" class="d-map"></div>
+            <div class="d-map-foot" id="d-map-foot"></div>
+          </div>
+        </div>
+        <form class="card pad" id="d-form" novalidate></form>
+      </div>
+    </section>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="assertive"></div>
+
+  <!-- Sign-in (cloud version only: shown when the server answers "login required") -->
+  <div class="login-screen" id="login" hidden>
+    <form class="card pad login-card" id="login-form" novalidate>
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3s-6.5 7-6.5 11.6a6.5 6.5 0 0 0 13 0C18.5 10 12 3 12 3z"/></svg></span>
+      <h1>Fuel Tank Warner</h1>
+      <label class="field"><span>Password</span><input type="password" name="password" id="login-pw" autocomplete="current-password" required></label>
+      <p class="login-err" id="login-err" role="alert"></p>
+      <button type="submit" class="btn primary" id="login-btn">Sign in</button>
+    </form>
+  </div>
+
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+{
+  "server": "https://fms.gpsbox.mn",
+
+  "host": "127.0.0.1",
+  "port": 8080,
+  "timezone": "Asia/Ulaanbaatar",
+
+  "checkEveryMinutes": 30,
+  "messagesMode": "full",
+  "apiConcurrency": 4,
+  "apiTimeoutSeconds": 90,
+  "backfillHours": 168,
+  "replayHours": 48,
+  "keepHours": 168,
+  "keepDays": 90,
+  "parkedReportMinutes": 65,
+  "calibrationsFile": "calibrations.json",
+  "excelFile": "Fuel events.xlsx",
+
+  "fuelParam": "io9",
+  "ignitionParam": "io239",
+  "powerParam": "io66",
+  "odometerParam": "io16",
+
+  "thresholds": {
+    "drainParkedMv": 300,
+    "drainTripMv": 600,
+    "consumptionMvPerHour": 600,
+    "refuelMv": 300,
+    "sensorMinValidMv": 100,
+    "lowFuelPct": 10,
+    "overspeedKmh": 90,
+    "idleMinutes": 30,
+    "offlineMinutes": 60,
+    "powerCutMv": 5000,
+    "afterHoursEnabled": false,
+    "afterHoursStart": "22:00",
+    "afterHoursEnd": "06:00"
+  },
+
+  "defaultCalibration": { "emptyMv": 0, "fullMv": 10000, "tankLiters": null },
+
+  "notify": {
+    "windowsToast": true,
+    "severities": ["critical", "warning"],
+    "throttleMinutes": 10
+  }
+}

@@ -1,0 +1,17 @@
+# private data and settings - never published
+data/
+config.local.json
+calibrations.json
+Fuel events.xlsx
+*.xlsx
+.env*
+testdata/
+*.log
+*.db
+*.db-wal
+*.db-shm
+
+# tooling
+node_modules/
+.vercel
+.claude/
