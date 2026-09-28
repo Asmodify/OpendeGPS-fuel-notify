@@ -115,6 +115,7 @@ export class Store {
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`),
       alertIdByKey: p('SELECT id FROM alerts WHERE key = ?'),
       getAlert: p('SELECT * FROM alerts WHERE id = ?'),
+      pendingDrains: p(`SELECT * FROM alerts WHERE type = 'fuel_drain' AND extra LIKE '%"pending":true%' ORDER BY t`),
       ack: p('UPDATE alerts SET acked = ?, acked_at = ?, updated_at = ? WHERE id = ?'),
       ackAll: p('UPDATE alerts SET acked = 1, acked_at = ?, updated_at = ? WHERE acked = 0'),
       ackAllImei: p('UPDATE alerts SET acked = 1, acked_at = ?, updated_at = ? WHERE acked = 0 AND imei = ?'),
@@ -299,9 +300,14 @@ export class Store {
     return this.st.getAlert.get(id) ?? null;
   }
 
-  /** patch: subset of { title, detail, amountMv, ongoing, severity, lat, lng, extra (JSON text) } */
+  /** Fuel drops still held back for the 5 h check (engine.js checkPendingDrains). */
+  pendingDrains() {
+    return this.st.pendingDrains.all();
+  }
+
+  /** patch: subset of { title, detail, amountMv, ongoing, severity, lat, lng, extra (JSON text), t } */
   updateAlert(id, patch, now = Date.now()) {
-    const cols = { title: 'title', detail: 'detail', amountMv: 'amount_mv', ongoing: 'ongoing', severity: 'severity', lat: 'lat', lng: 'lng', extra: 'extra' };
+    const cols = { title: 'title', detail: 'detail', amountMv: 'amount_mv', ongoing: 'ongoing', severity: 'severity', lat: 'lat', lng: 'lng', extra: 'extra', t: 't' };
     const sets = [];
     const vals = [];
     for (const [k, col] of Object.entries(cols)) {
@@ -310,6 +316,7 @@ export class Store {
       if (k === 'ongoing') v = v ? 1 : 0;
       if (k === 'severity' && !['critical', 'warning', 'info'].includes(v)) continue;
       if ((k === 'amountMv' || k === 'lat' || k === 'lng') && v !== null && !Number.isFinite(Number(v))) continue;
+      if (k === 't' && !Number.isFinite(Number(v))) continue;
       sets.push(`${col} = ?`);
       vals.push(nz(v));
     }

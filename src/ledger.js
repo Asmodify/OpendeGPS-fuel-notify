@@ -36,7 +36,9 @@ const DT = 'yyyy-mm-dd hh:mm';
 const L1 = '#,##0.0';
 const L0 = '#,##0';
 
-function parseExtra(json) {
+const PENDING = 'Checking — waiting 5 h';
+
+export function parseExtra(json) {
   if (!json) return {};
   if (typeof json === 'object') return Array.isArray(json) ? {} : json;
   try {
@@ -47,9 +49,15 @@ function parseExtra(json) {
   }
 }
 
-/** A fuel drain whose level came back (the detector downgraded it to an info "sensor dip"). */
+/** A fuel drop still being checked: not alerted yet, and not counted until confirmed (engine.js). */
+export function isPendingDrain(row) {
+  return row.type === 'fuel_drain' && parseExtra(row.extra).pending === true;
+}
+
+/** A fuel drain whose level came back (the detector downgraded it to an info "sensor dip", or
+ *  the 5 h check found the level back to normal). */
 export function isCancelledDrain(row) {
-  return row.type === 'fuel_drain' && (row.severity === 'info' || /level recovered/i.test(row.title || ''));
+  return row.type === 'fuel_drain' && !isPendingDrain(row) && (row.severity === 'info' || /level recovered|level came back/i.test(row.title || ''));
 }
 
 /**
@@ -64,6 +72,7 @@ export function isCancelledDrain(row) {
 export function ledgerEntry(row) {
   const verdict = row.verdict === 'confirmed' || row.verdict === 'false_alarm' ? row.verdict : 'unchecked';
   if (row.type !== 'fuel_drain') return { cancelled: false, verdict, counted: true, mv: num(row.amount_mv) };
+  if (isPendingDrain(row)) return { cancelled: false, pending: true, verdict, counted: verdict === 'confirmed', mv: num(row.amount_mv) };
   const cancelled = isCancelledDrain(row);
   const mv = cancelled ? num(parseExtra(row.extra).dipMv) : num(row.amount_mv);
   return { cancelled, verdict, counted: verdict === 'confirmed' || (!cancelled && verdict !== 'false_alarm'), mv };
@@ -516,7 +525,7 @@ export function buildLedger({ alerts = [], vehicles = [], calibrations = {}, tzO
     const tot = vehTotals(imei);
 
     // counted / size exactly as the dashboard's Report counts them (ledgerEntry)
-    const { cancelled, verdict, counted, mv } = ledgerEntry(row);
+    const { cancelled, pending, verdict, counted, mv } = ledgerEntry(row);
     const L = fuelEventLitres(row, mv, cal);
 
     if (row.type === 'refuel') {
@@ -562,7 +571,7 @@ export function buildLedger({ alerts = [], vehicles = [], calibrations = {}, tzO
       start, row.t, name, group, cancelled && verdict !== 'confirmed' ? null : L, litres(fromMv), litres(toMv), situationOf(row),
       row.from_t !== null && row.from_t !== undefined ? Math.max(0, Math.round((row.t - row.from_t) / MIN)) : null,
       mapLink(row.lat, row.lng), VERDICT_LABEL[verdict] || 'Unchecked', row.note || null,
-      cancelled ? CANCELLED : row.ongoing ? 'Ongoing' : 'Closed', mv === null ? null : Math.round(mv), imei, row.detail || '', row.id,
+      pending ? PENDING : cancelled ? CANCELLED : row.ongoing ? 'Ongoing' : 'Closed', mv === null ? null : Math.round(mv), imei, row.detail || '', row.id,
     ]);
   }
   thefts.sort((a, b) => b[0] - a[0] || b[16] - a[16]);

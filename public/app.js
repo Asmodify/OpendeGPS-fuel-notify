@@ -269,6 +269,12 @@ function toast({ sev = 'info', title, body, action, timeout }) {
 function renderBanners() {
   const out = [];
   const b = (sev, ic, title, body, extra) => html`<div class="banner sev-${sev}">${icon(ic)}<div class="banner-text"><b>${title}</b>${body ? html` <span>${body}</span>` : ''}</div>${extra || ''}</div>`;
+  if (pendingNew.size) {
+    const n = pendingNew.size;
+    const sev = [...pendingNew.values()].some((x) => x.severity === 'critical') ? 'critical' : 'warning';
+    out.push(b(sev, 'bell', `${n} new alert${n === 1 ? '' : 's'}`, 'Refresh to see them in the lists.',
+      html`<button type="button" class="btn small primary" data-action="refresh-new">Refresh</button>`));
+  }
   if (S.serverDown) {
     out.push(S.mode === 'cloud'
       ? b('critical', 'server', 'Cannot reach the Fuel Tank Warner server.', 'Check the internet connection. Retrying automatically…')
@@ -432,7 +438,7 @@ function notifyAlert(a) {
     sev: a.severity,
     title: `${name}: ${title}`,
     body: `${typeLabel(a.type)} · ${fmtTime(a.t, now())}${a.detail ? ' — ' + String(a.detail).slice(0, 140) : ''}`,
-    action: { label: 'Show details', fn: () => openVehicle(a.imei, a.t) },
+    action: { label: 'Refresh & show', fn: () => { refreshNew(); openVehicle(a.imei, a.t); } },
   });
   if (a.severity === 'critical' && S.prefs.sound) beep('critical');
   // the dashboard is only allowed pop-ups on this computer, where the program already shows
@@ -444,7 +450,7 @@ function notifyAlert(a) {
         tag: String(a.key || a.id),
         requireInteraction: a.severity === 'critical',
       });
-      n.onclick = () => { window.focus(); openVehicle(a.imei, a.t); n.close(); };
+      n.onclick = () => { window.focus(); refreshNew(); openVehicle(a.imei, a.t); n.close(); };
     } catch { /* ignore */ }
   }
 }
@@ -529,7 +535,8 @@ async function loadRecentAlertIds() {
   // Remember recent alerts so that later SSE updates of them are not mistaken for new ones.
   try {
     const list = await api(`/api/alerts?since=${Math.round(now() - 6 * HOUR)}&limit=1000`);
-    if (Array.isArray(list)) for (const a of list) { S.seen.add(a.id); alertSigs.set(a.id, JSON.stringify(a)); }
+    // (drops still being checked are left out: their confirmation must count as new)
+    if (Array.isArray(list)) for (const a of list) { if (!a.pending) S.seen.add(a.id); alertSigs.set(a.id, JSON.stringify(a)); }
   } catch { /* not critical */ }
 }
 
@@ -682,16 +689,41 @@ function alertMatches(a) {
 }
 const renderAlertsSoon = debounce(() => renderAlerts(), 120);
 const reloadReportSoon = debounce(() => { if (S.view === 'report') loadReport(); }, 2000);
+// New live alerts are not slipped into the page on their own: they wait here, a banner asks
+// the owner to refresh, and the lists update when they click it.
+const pendingNew = new Map(); // alert id -> latest version
+function refreshNew() {
+  for (const id of pendingNew.keys()) {
+    S.alerts.newIds.add(id); // highlighted for a minute once shown
+    setTimeout(() => { S.alerts.newIds.delete(id); }, 60e3);
+  }
+  pendingNew.clear();
+  renderBanners();
+  S.report.loadedAt = 0;
+  if (S.view === 'report' && S.report.rows) reloadReportSoon();
+  resync();
+}
+
 function onAlert(rawA) {
   if (!rawA || rawA.id === undefined || rawA.id === null) return;
   const a = normAlert(rawA);
+  if (pendingNew.has(a.id)) { pendingNew.set(a.id, a); return; } // still waiting for a refresh
+  if (a.pending) {
+    // a fuel drop the server is still checking (5 h): not news yet. When it is confirmed it
+    // arrives again as a critical alert, which is then treated as new.
+    const i = S.alerts.list.findIndex((x) => x.id === a.id);
+    if (i >= 0) { S.alerts.list[i] = a; if (S.view === 'alerts') renderAlertsSoon(); }
+    return;
+  }
   const known = S.seen.has(a.id);
   S.seen.add(a.id);
   const fresh = isNum(a.t) && now() - a.t < HOUR;
-  if (!known && !a.historical && !a.acked && fresh) {
-    S.alerts.newIds.add(a.id);
-    setTimeout(() => { S.alerts.newIds.delete(a.id); }, 60e3);
+  const quiet = a.type === 'fuel_drain' && a.severity === 'info'; // a drop that turned out to be a misreading
+  if (!known && !a.historical && !a.acked && fresh && !quiet) {
+    pendingNew.set(a.id, a);
     notifyAlert(a);
+    renderBanners();
+    return;
   }
   const st = S.alerts;
   const idx = st.list.findIndex((x) => x.id === a.id);
@@ -2026,6 +2058,7 @@ function bindStatic() {
         syncFleetControls();
         renderFleet();
       } else if (a === 'enable-notif') requestNotif();
+      else if (a === 'refresh-new') refreshNew();
       else if (a === 'dismiss-notif-hint') { savePref('notifHintDismissed', true); renderBanners(); }
       else if (a === 'alerts-show-saved') restoreAlertFilters();
       else if (a === 'ack-vehicle' && S.detail) ackVehicle(S.detail.imei);

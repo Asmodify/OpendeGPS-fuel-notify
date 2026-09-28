@@ -26,6 +26,7 @@ import crypto from 'node:crypto';
 import { createApi } from '../api.js';
 import { errText, fromApiDate, mapPool, isPlainObject, haversineM } from '../util.js';
 import { MemDb } from './memdb.js';
+import { isPendingDrain } from '../ledger.js';
 import { CloudEngine, recStateOf, checkIntervalOf } from './engine.js';
 import { cloudConfig } from './config.js';
 import { js } from './pg.js';
@@ -305,6 +306,8 @@ async function tick(sql, env, holder, now, force, timing, t0) {
     if (f.mode !== 'backfill') rec.backfilled = true;
   }
 
+  engine.checkPendingDrains(now); // fuel drops held for the 5 h check
+
   // ---- 5. save ---------------------------------------------------------------------------
   const fedImeis = new Set(feeds.map((f) => f.rec.imei));
   const snapOut = [];
@@ -358,7 +361,7 @@ async function tick(sql, env, holder, now, force, timing, t0) {
     ver: newVer,
     vehicles: vehiclesNow,
     settings: base.settings,
-    ongoing: [...db.alerts.values()].filter((a) => a.ongoing),
+    ongoing: [...db.alerts.values()].filter((a) => a.ongoing || isPendingDrain(a)),
     nextAlertId: db.nextAlertId,
   };
   return { ...summary, ...timing() };
@@ -368,7 +371,7 @@ async function loadBase(sql) {
   const [vehicles, settings, ongoing, maxId] = await Promise.all([
     sql.unsafe(`select ${VEHICLE_SELECT}, rec, det_state from fuel.vehicles`),
     sql`select k, v from fuel.settings where k not like 'learned:%'`,
-    sql`select * from fuel.alerts where ongoing`,
+    sql`select * from fuel.alerts where ongoing or (type = 'fuel_drain' and extra like '%"pending":true%')`,
     sql`select coalesce(max(id), 0) as m from fuel.alerts`,
   ]);
   return { ver: null, vehicles: plain(vehicles), settings: settingsObject(settings), ongoing: plain(ongoing), nextAlertId: Number(maxId[0].m) + 1 };
@@ -480,9 +483,9 @@ async function save(sql, holder, { db, vehiclesOut, snapOut, ps }) {
     if (updates.length) {
       // only the columns the detectors / offline checks change (acks and reviews stay as the dashboard set them)
       q.push(tx`update fuel.alerts a set title = x.title, detail = x.detail, amount_mv = x.amount_mv, ongoing = x.ongoing,
-          severity = x.severity, lat = x.lat, lng = x.lng, extra = x.extra, updated_at = x.updated_at
+          severity = x.severity, lat = x.lat, lng = x.lng, extra = x.extra, t = x.t, updated_at = x.updated_at
         from jsonb_to_recordset(${js(updates)}::jsonb) as x(id bigint, title text, detail text, amount_mv float8, ongoing boolean,
-          severity text, lat float8, lng float8, extra text, updated_at bigint)
+          severity text, lat float8, lng float8, extra text, t bigint, updated_at bigint)
         where a.id = x.id`);
     }
     if (settingsSet.length) {

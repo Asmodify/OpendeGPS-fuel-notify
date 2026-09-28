@@ -3,7 +3,7 @@
 // and the JSON views served by the HTTP API.
 import { DEFAULT_THRESHOLDS, DEFAULT_CALIBRATION, CHECK_MIN_MINUTES, CHECK_MAX_MINUTES, clampCheckMinutes } from './config.js';
 import { LEDGER_TYPES } from './db.js';
-import { ledgerEntry, litersAt, fuelPct, amountLitres, fuelEventLitres } from './ledger.js';
+import { ledgerEntry, litersAt, fuelPct, amountLitres, fuelEventLitres, isPendingDrain, parseExtra } from './ledger.js';
 import {
   log, errText, num, int01, clamp, round, fromApiDate, shortName, haversineM, fmtDuration, fmtLocal,
   tzOffsetMinutes, parseHHMM, isPlainObject, deepMerge,
@@ -12,6 +12,9 @@ import {
 const SEVERITIES = ['critical', 'warning', 'info'];
 const HOUR = 3600e3;
 const MIN = 60e3;
+const DRAIN_CONFIRM_MS = 5 * HOUR; // a fuel drop must stay down this long before it is alerted
+const PENDING_TITLE = 'Possible fuel drop — checking (5 h)';
+const FALSE_ALARM_TITLE = 'False alarm — fuel sensor misreading (level came back)';
 const HOLD_MIN_MS = 20 * MIN; // after a gap in the data, wait at least this long for the backlog
 const HOLD_MAX_MS = 2 * HOUR; // ...and at most this long
 
@@ -859,7 +862,7 @@ export class Engine {
   raiseAlert(a, mode = 'live') {
     const type = String(a.type || 'unknown');
     const meta = this.alertTypes[type];
-    const severity = SEVERITIES.includes(a.severity) ? a.severity : meta?.severity || 'warning';
+    let severity = SEVERITIES.includes(a.severity) ? a.severity : meta?.severity || 'warning';
     const t = Number.isFinite(a.t) ? Math.round(a.t) : Date.now();
     const fromT = Number.isFinite(a.fromT) ? Math.round(a.fromT) : null;
     const imei = a.imei === undefined || a.imei === null ? null : String(a.imei);
@@ -873,10 +876,19 @@ export class Engine {
     }
     const extra = {};
     for (const [k, v] of Object.entries(a)) if (!KNOWN_ALERT_FIELDS.has(k) && v !== undefined) extra[k] = v;
+    let title = a.title ? String(a.title) : meta?.label || type;
+    // Sensors sometimes misread: a fuel drop is held back as "checking" for DRAIN_CONFIRM_MS and
+    // only becomes a critical alert if the level has not come back by then (checkPendingDrains).
+    const pending = type === 'fuel_drain' && severity === 'critical';
+    if (pending) {
+      Object.assign(extra, { pending: true, pendingUntil: t + DRAIN_CONFIRM_MS, origTitle: title });
+      severity = 'info';
+      title = PENDING_TITLE;
+    }
     const row = {
       key, imei, name: a.name ?? imei, type, severity, t, fromT,
       lat: num(a.lat), lng: num(a.lng),
-      title: a.title ? String(a.title) : meta?.label || type,
+      title,
       detail: a.detail === undefined || a.detail === null ? '' : String(a.detail),
       amountMv: num(a.amountMv),
       ongoing: !!a.ongoing,
@@ -894,7 +906,11 @@ export class Engine {
       this.stats.alertsCreated++;
       this.summaryCache.clear();
       if (LEDGER_TYPES.includes(type)) this.ledger?.touch('new fuel event');
-      if (mode === 'live') {
+      // a refuel after a drop: the level coming back no longer proves the drop was a misreading
+      if (type === 'refuel' && imei) this.markRefuelAfterDrains(imei, fromT ?? t);
+      if (pending) {
+        log('info', `Fuel drop on ${shortName(row.name ?? imei)} held for a ${DRAIN_CONFIRM_MS / HOUR} h check - ${row.detail}`);
+      } else if (mode === 'live') {
         const view = this.alertView(this.db.getAlert(res.id));
         log('info', `ALERT [${severity}] ${view.shortName || imei}: ${view.title} - ${view.detail}`);
         this.hub?.broadcast('alert', view);
@@ -919,6 +935,18 @@ export class Engine {
         if (PATCH_COLUMNS.has(k)) cols[k] = v;
         else if (v !== undefined && /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(k)) more[k] = v;
       }
+      if (isPendingDrain(row)) {
+        if (cols.severity === 'info' && 'amountMv' in cols && cols.amountMv === null) {
+          // the detector saw the level come back while the drop was still being checked
+          cols.title = FALSE_ALARM_TITLE;
+          Object.assign(more, { pending: false, falseAlarm: true });
+        } else {
+          // still being checked: stays quiet; the detector's title is used once confirmed
+          if ('title' in cols) { more.origTitle = cols.title; delete cols.title; }
+          delete cols.severity;
+        }
+        broadcast = false;
+      }
       // a drain whose level came back loses its amount; the size of the dip stays on record
       if (row.type === 'fuel_drain' && 'amountMv' in cols && cols.amountMv === null && row.amount_mv !== null && more.dipMv === undefined) {
         more.dipMv = row.amount_mv;
@@ -942,6 +970,73 @@ export class Engine {
       }
     } catch (e) {
       log('error', 'Updating alert failed:', e);
+    }
+  }
+
+  /** Marks drops still being checked on this vehicle that a refuel at time t followed. */
+  markRefuelAfterDrains(imei, t) {
+    for (const row of this.pendingDrainRows()) {
+      if (row.imei !== imei || t < (row.from_t ?? row.t)) continue;
+      const x = parseExtra(row.extra);
+      if (!x.refuelSeen) this.db.updateAlert(row.id, { extra: JSON.stringify({ ...x, refuelSeen: true }) });
+    }
+  }
+
+  pendingDrainRows() {
+    try {
+      return this.db.pendingDrains?.() ?? [];
+    } catch (e) {
+      log('error', 'Reading fuel drops being checked failed:', e);
+      return [];
+    }
+  }
+
+  /**
+   * Settles the fuel drops held back as "checking" (raiseAlert): a drop whose level has come back
+   * (and no refuel since) was a sensor misreading and is closed as a false alarm; one still down
+   * after DRAIN_CONFIRM_MS becomes a critical alert and is notified then. Runs after each check.
+   */
+  checkPendingDrains(now = Date.now()) {
+    for (const row of this.pendingDrainRows()) {
+      try {
+        const x = parseExtra(row.extra);
+        const st = row.imei ? this.recs.get(row.imei)?.det?.getState?.() : null;
+        const fromMv = num(x.fromMv);
+        const amount = num(row.amount_mv);
+        const level = st && Number.isFinite(st.level) && st.levelT > row.t ? st.level : null;
+        let cols = null;
+        let confirmed = false;
+        if (!x.refuelSeen && level !== null && fromMv !== null && amount && fromMv - level <= Math.max(100, 0.25 * amount)) {
+          cols = {
+            severity: 'info', title: FALSE_ALARM_TITLE, amountMv: null,
+            extra: JSON.stringify({ ...x, pending: false, falseAlarm: true, dipMv: amount, recoveredMv: Math.round(level) }),
+          };
+        } else if (now >= (num(x.pendingUntil) ?? row.t + DRAIN_CONFIRM_MS)) {
+          confirmed = true;
+          cols = {
+            severity: 'critical', title: x.origTitle || 'Fuel drop',
+            detail: `${row.detail || ''} Level still down after ${DRAIN_CONFIRM_MS / HOUR} h.`.trim(),
+            // a live alert is dated when it is confirmed, so the dashboard treats it as new
+            t: row.historical ? row.t : now,
+            extra: JSON.stringify({ ...x, pending: false, confirmedAt: now, detectedT: row.t }),
+          };
+        }
+        if (!cols || !this.db.updateAlert(row.id, cols)) continue;
+        this.summaryCache.clear();
+        this.ledger?.touch(confirmed ? 'fuel drop confirmed' : 'fuel drop was a misreading');
+        const view = this.alertView(this.db.getAlert(row.id));
+        log('info', `${confirmed ? 'ALERT [critical]' : 'False alarm (level came back):'} ${view.shortName || row.imei}: ${view.title} - ${view.detail}`);
+        if (confirmed && !row.historical) {
+          this.hub?.broadcast('alert', view);
+          try {
+            this.notifier?.enqueue(view);
+          } catch (e) {
+            log('error', 'Notification failed:', e);
+          }
+        }
+      } catch (e) {
+        log('error', 'Checking a fuel drop failed:', e);
+      }
     }
   }
 
@@ -982,6 +1077,7 @@ export class Engine {
       acked: !!row.acked,
       ackedAt: row.acked_at,
       historical: !!row.historical,
+      pending: isPendingDrain(row),
       verdict: VERDICTS.includes(row.verdict) ? row.verdict : 'unchecked',
       note: row.note ?? '',
       reviewedAt: row.reviewed_at ?? null,

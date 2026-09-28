@@ -341,6 +341,7 @@ export class Poller {
     bf.finishedAt = Date.now();
     bf.durationMs = bf.finishedAt - now;
     this.engine.historyReady = true;
+    this.engine.checkPendingDrains(); // fuel drops held for the 5 h check
     this.engine.saveLearned();
     if (lastErr) this.recordError('messages', lastErr, ` (backfill: ${bf.failed}/${bf.total} vehicles failed, retried in the next cycle)`, bf.failed < bf.total);
     else if (todo.length) this.markOk('messages');
@@ -454,6 +455,7 @@ export class Poller {
     this.status.lastMessagesPoll = Date.now();
     this.status.lastMessages = { vehicles: due.length, deferred: waiting - due.length, samples, failed, durationMs: Date.now() - t0, waitingForBacklog: this.engine.heldCount() };
     this.engine.stats.heldVehicles = this.engine.heldCount();
+    this.engine.checkPendingDrains(); // fuel drops held for the 5 h check
     this.engine.saveLearned();
     if (failed) this.recordError('messages', lastErr, ` (${failed}/${due.length} vehicles failed, retried next cycle)`, failed < due.length);
     else this.markOk('messages');

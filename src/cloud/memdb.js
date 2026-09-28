@@ -3,6 +3,7 @@
 // into a MemDb, runs the Engine synchronously against it, and then writes back the changes the
 // MemDb recorded (see store.js). Method names, arguments and row shapes follow db.js.
 import { LEDGER_TYPES } from '../db.js';
+import { isPendingDrain } from '../ledger.js';
 
 const nz = (x) => (x === undefined || (typeof x === 'number' && !Number.isFinite(x)) ? null : x);
 const SAMPLE_COLS = ['t', 'f', 'spd', 'ign', 'pwr', 'lat', 'lng', 'odo'];
@@ -229,7 +230,7 @@ export class MemDb {
   updateAlert(id, patch, now = Date.now()) {
     const row = this.alerts.get(Number(id));
     if (!row) return false;
-    const cols = { title: 'title', detail: 'detail', amountMv: 'amount_mv', ongoing: 'ongoing', severity: 'severity', lat: 'lat', lng: 'lng', extra: 'extra' };
+    const cols = { title: 'title', detail: 'detail', amountMv: 'amount_mv', ongoing: 'ongoing', severity: 'severity', lat: 'lat', lng: 'lng', extra: 'extra', t: 't' };
     let changed = false;
     for (const [k, col] of Object.entries(cols)) {
       if (!(k in patch)) continue;
@@ -238,6 +239,7 @@ export class MemDb {
       if (k === 'severity' && !['critical', 'warning', 'info'].includes(v)) continue;
       if ((k === 'amountMv' || k === 'lat' || k === 'lng') && v !== null && !Number.isFinite(Number(v))) continue;
       if ((k === 'amountMv' || k === 'lat' || k === 'lng') && v !== null) v = Number(v);
+      if (k === 't') { if (!Number.isFinite(Number(v))) continue; v = Number(v); }
       row[col] = nz(v);
       changed = true;
     }
@@ -246,6 +248,11 @@ export class MemDb {
     if (this.out.newAlerts.has(row.id)) this.out.newAlerts.set(row.id, row);
     else this.out.alertUpdates.add(row.id);
     return true;
+  }
+
+  /** Fuel drops held back for the 5 h check, among the alerts this tick loaded (tick.js loadBase). */
+  pendingDrains() {
+    return [...this.alerts.values()].filter((a) => isPendingDrain(a)).map((a) => ({ ...a }));
   }
 
   queryAlerts() {
