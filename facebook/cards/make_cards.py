@@ -28,7 +28,7 @@ CSS = """
 @font-face{font-family:Onest;font-weight:900;src:url(fonts/Onest-900.ttf)}
 @font-face{font-family:Manrope;font-weight:700;src:url(fonts/Manrope-700.ttf)}
 @font-face{font-family:Manrope;font-weight:800;src:url(fonts/Manrope-800.ttf)}
-:root{--coal:#141619;--coal2:#1f2328;--hivis:#ff6b1a;--white:#f4f5f6;--grey:#9aa1a9}
+:root{--coal:#141619;--coal2:#1f2328;--hivis:#ffc21a;--white:#f4f5f6;--grey:#9aa1a9}
 *{margin:0;box-sizing:border-box}
 html,body{width:1080px;height:1080px;overflow:hidden}
 body{background:
