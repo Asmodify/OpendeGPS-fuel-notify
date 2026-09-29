@@ -19,6 +19,25 @@ Open Development-ийн Facebook хуудас (id `61593781929270`) руу `post
 | `image` | заавал биш; `images/файл.jpg` эсвэл `https://...` зургийн холбоос |
 | `link` | заавал биш; зураггүй пост дээр холбоос хавсаргана |
 
+| `series` | цувралын нэр, зургийн дээд талд гарна |
+| `card` | зургийн том гарчиг (`headline`) ба 3 мөр (`lines`) |
+
+Утасны дугаарыг `posts.json`-ийн `contact.phone`-д (WeChat бол `contact.wechat`) нэг удаа бичнэ;
+бичвэр дэх `{phone}` автоматаар солигдоно. `[[...]]` гэсэн бөглөх хэсэгтэй эсвэл утас
+тохируулаагүй постыг зөвшөөрсөн ч нийтлэхгүй, `list` дээр `blocked` гэж харагдана.
+
+## Зураг (карт)
+
+Пост бүрд 1080x1080 брэндийн зураг `cards/`-д байна. Бичвэр, утас өөрчлөгдвөл дахин үүсгэнэ:
+
+```bash
+python facebook/cards/make_cards.py              # бүгд
+python facebook/cards/make_cards.py 2026-10-07-drivers
+```
+
+chrome-headless-shell хэрэгтэй (`npx @puppeteer/browsers install chrome-headless-shell`,
+дараа нь `CHROME=<зам>`). Фонтууд (Onest, Manrope, OFL лиценз) `cards/fonts/`-д бий.
+
 Нийтлэгдсэн постод `posted_id`, `posted_at` автоматаар бичигдэнэ; тэр постыг дахин нийтлэхгүй.
 
 ## Нэг удаагийн тохиргоо

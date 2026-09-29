@@ -54,23 +54,43 @@ def parse_time(value):
     return datetime.strptime(value, "%Y-%m-%d %H:%M").replace(tzinfo=UB)
 
 
-def post_state(post, now):
+def contact_line(queue):
+    contact = queue.get("contact", {})
+    line = contact.get("phone", "")
+    if contact.get("wechat"):
+        line += f" · WeChat: {contact['wechat']}"
+    return line
+
+
+def blockers(post, queue):
+    """Reasons a post can't go out yet: unfilled [[placeholders]] or no phone number."""
+    reasons = []
+    if "[[" in post["text"]:
+        reasons.append("fill in the [[...]] parts")
+    if "{phone}" in post["text"] and not queue.get("contact", {}).get("phone"):
+        reasons.append("set contact.phone")
+    return reasons
+
+
+def post_state(post, now, queue=None):
     if post.get("posted_id"):
         return "posted"
     if not post.get("approved"):
         return "draft"
+    if queue is not None and blockers(post, queue):
+        return "blocked"
     return "due" if parse_time(post["publish_at"]) <= now else "scheduled"
 
 
 def due_posts(queue, now, limit):
-    """Approved, unposted posts whose time has come, oldest first, at most `limit`."""
-    due = [p for p in queue["posts"] if post_state(p, now) == "due"]
+    """Approved, unblocked, unposted posts whose time has come, oldest first, at most `limit`."""
+    due = [p for p in queue["posts"] if post_state(p, now, queue) == "due"]
     due.sort(key=lambda p: parse_time(p["publish_at"]))
     return due[:limit]
 
 
 def compose_message(post, queue):
-    text = post["text"].strip()
+    text = post["text"].strip().replace("{phone}", contact_line(queue))
     tags = post.get("hashtags", queue.get("default_hashtags", []))
     if tags:
         text += "\n\n" + " ".join(tags)
@@ -160,9 +180,11 @@ def settings(queue):
 def cmd_list(queue, now, _args):
     counts = {}
     for p in queue["posts"]:
-        state = post_state(p, now)
+        state = post_state(p, now, queue)
         counts[state] = counts.get(state, 0) + 1
-        print(f"{p['id']:<24} {p['publish_at']}  {state:<9} {p['title']}")
+        why = blockers(p, queue)
+        note = f"  ({'; '.join(why)})" if why and state != "posted" else ""
+        print(f"{p['id']:<26} {p['publish_at']}  {state:<9} {p['title']}{note}")
     print("\n" + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
     return 0
 
@@ -183,6 +205,9 @@ def cmd_run(queue, now, args):
     if live and not token:
         print("Live run needs FB_PAGE_TOKEN; nothing posted.")
         return 1
+    for p in queue["posts"]:
+        if post_state(p, now, queue) == "blocked" and parse_time(p["publish_at"]) <= now:
+            print(f"Skipping {p['id']}: {'; '.join(blockers(p, queue))}")
     todo = due_posts(queue, now, args.max)
     if not todo:
         print("Nothing due.")
@@ -208,7 +233,7 @@ def cmd_run(queue, now, args):
 def cmd_preview(queue, now, _args):
     cards = []
     for p in sorted(queue["posts"], key=lambda p: p["publish_at"]):
-        state = post_state(p, now)
+        state = post_state(p, now, queue)
         body = html.escape(compose_message(p, queue)).replace("\n", "<br>")
         cards.append(
             f'<article><header><b>{html.escape(p["publish_at"])}</b>'

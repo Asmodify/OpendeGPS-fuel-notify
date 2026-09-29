@@ -40,6 +40,23 @@ class DueTests(unittest.TestCase):
         self.assertEqual(fb.compose_message(own, q), "hello")
 
 
+class BlockerTests(unittest.TestCase):
+    now = fb.parse_time("2026-10-10 12:00")
+
+    def test_placeholders_and_missing_phone_block(self):
+        q = queue(post("fill", "2026-10-09 10:00", text="[[Нэр]]"),
+                  post("phone", "2026-10-09 10:00", text="☎️ {phone}"))
+        self.assertEqual(fb.post_state(q["posts"][0], self.now, q), "blocked")
+        self.assertEqual(fb.post_state(q["posts"][1], self.now, q), "blocked")
+        self.assertEqual(fb.due_posts(q, self.now, 5), [])
+
+    def test_phone_is_filled_in(self):
+        q = queue(post("phone", "2026-10-09 10:00", text="☎️ {phone}", hashtags=[]))
+        q["contact"] = {"phone": "8811 2233", "wechat": "od88"}
+        self.assertEqual(fb.due_posts(q, self.now, 5), q["posts"])
+        self.assertEqual(fb.compose_message(q["posts"][0], q), "☎️ 8811 2233 · WeChat: od88")
+
+
 class PublishTests(unittest.TestCase):
     def test_text_post_goes_to_feed(self):
         with mock.patch.object(fb, "graph_request", return_value={"id": "123_9"}) as req:
