@@ -12,7 +12,8 @@ Open Development-ийн жолооч нар өдөр тутмын ажлаа Ope
 ✔️ Түлшний баримтаа зургаар илгээнэ
 ✔️ Эвдрэл гэмтлээ зурагтай мэдээлнэ
 
-📲 App Store-оос татах: https://apps.apple.com/mn/app/open-t/id6794206874
+📲 iPhone: https://apps.apple.com/mn/app/open-t/id6794206874
+📲 Android: Google Play-оос "Open Teever" гэж хайна.
 ☎️ 8008 5792
 
 #OpenTeever #OpenDevelopment #Нүүрс #тээвэр #жолооч
@@ -21,7 +22,7 @@ Open Development-ийн жолооч нар өдөр тутмын ажлаа Ope
 
 📘 OPEN TEEVER АПП-ЫГ 8 АЛХМААР ЭЗЭМШ
 
-1️⃣ App Store-оос татаж суулгана: https://apps.apple.com/mn/app/open-t/id6794206874
+1️⃣ Апп-аа суулгана. iPhone: https://apps.apple.com/mn/app/open-t/id6794206874 , Android: Google Play-оос "Open Teever" гэж хайна.
 2️⃣ "Бүртгүүлэх" дарж утас, нэр, нууц үг, компанийн кодоо оруулна. SMS кодоор баталгаажуулна.
 3️⃣ "DAN-аар баталгаажуулах" дарж иргэний мэдээллээ баталгаажуулна.
 4️⃣ Бичиг баримт, яаралтай холбоо, гэрээ, гарын үсгээ оруулаад "Илгээх". Админ хянана.
