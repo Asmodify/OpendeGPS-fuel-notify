@@ -20,6 +20,7 @@ const MIN = 60e3;
 const DRAIN_CONFIRM_MS = 5 * HOUR; // a fuel drop must stay down this long before it is alerted
 const PENDING_TITLE = 'Possible fuel drop — checking (5 h)';
 const FALSE_ALARM_TITLE = 'False alarm — fuel sensor misreading (level came back)';
+const FALSE_ALARM_MAX_RISE_MV = 300; // ending this much above the pre-drop level = refuel on top, not a misreading
 const HOLD_MIN_MS = 20 * MIN; // after a gap in the data, wait at least this long for the backlog
 const HOLD_MAX_MS = 2 * HOUR; // ...and at most this long
 const OFFLINE_ALERT_MS = 6 * HOUR; // a silent tracker is alerted after this long (sooner only if the fuel changed)
@@ -1081,7 +1082,11 @@ export class Engine {
         const level = st && Number.isFinite(st.level) && st.levelT > row.t ? st.level : null;
         let cols = null;
         let confirmed = false;
-        if (!x.refuelSeen && level !== null && fromMv !== null && amount && fromMv - level <= Math.max(100, 0.25 * amount)) {
+        // "Came back" only when the level returned to (almost) where it was and not clearly above
+        // it: a level that ends higher than before the drop means fuel was added on top of it.
+        const back = level !== null && fromMv !== null && amount &&
+          fromMv - level <= Math.max(80, 0.15 * amount) && level - fromMv < FALSE_ALARM_MAX_RISE_MV;
+        if (!x.refuelSeen && back) {
           cols = {
             severity: 'info', title: FALSE_ALARM_TITLE, amountMv: null,
             extra: JSON.stringify({ ...x, pending: false, falseAlarm: true, dipMv: amount, recoveredMv: Math.round(level) }),

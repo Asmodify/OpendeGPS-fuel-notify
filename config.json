@@ -23,8 +23,8 @@
   "odometerParam": "io16",
 
   "thresholds": {
-    "drainParkedMv": 300,
-    "drainTripMv": 600,
+    "drainParkedMv": 250,
+    "drainTripMv": 450,
     "consumptionMvPerHour": 600,
     "refuelMv": 300,
     "sensorMinValidMv": 100,

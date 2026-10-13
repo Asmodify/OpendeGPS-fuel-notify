@@ -13,8 +13,8 @@ import { deepMerge, isPlainObject } from './util.js';
 export const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export const DEFAULT_THRESHOLDS = Object.freeze({
-  drainParkedMv: 300,
-  drainTripMv: 600,
+  drainParkedMv: 250,
+  drainTripMv: 450,
   consumptionMvPerHour: 600,
   refuelMv: 300,
   sensorMinValidMv: 100,
