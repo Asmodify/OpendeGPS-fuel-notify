@@ -226,7 +226,7 @@ export class FuelChart {
     for (let v = 0; v <= vmax + 1e-9; v += yStep) {
       const y = r1(fy(v));
       parts.push(`<line class="${v === 0 ? 'c-base' : 'c-grid'}" x1="${mL}" x2="${W - mR}" y1="${y}" y2="${y}"/>`);
-      parts.push(`<text class="c-ylab" x="${mL - 6}" y="${y + 3.5}" text-anchor="end">${fmtNum(v, yStep < 1 ? 1 : 0)}${v === vmax ? (u.name === '%' ? '%' : ' L') : ''}</text>`);
+      parts.push(`<text class="c-ylab" x="${mL - 6}" y="${y + 3.5}" text-anchor="end">${fmtNum(v, yStep < 1 ? 1 : 0)}${v === vmax ? (u.name === '%' ? '%' : ' л') : ''}</text>`);
     }
     // x grid + labels
     const ticks = timeTicks(v0, v1, plotW);
@@ -236,16 +236,16 @@ export class FuelChart {
       parts.push(`<text class="c-xlab${tk.major ? ' major' : ''}" x="${x}" y="${axisY + 12}" text-anchor="middle">${tk.label}</text>`);
     }
     // strip labels
-    parts.push(`<text class="c-slab" x="${mL - 6}" y="${sy0 + 10}" text-anchor="end">km/h</text>`);
-    parts.push(`<text class="c-slab" x="${mL - 6}" y="${iy1}" text-anchor="end">Engine</text>`);
-    parts.push(`<text class="c-slab" x="${mL - 6}" y="${py1}" text-anchor="end">Power</text>`);
+    parts.push(`<text class="c-slab" x="${mL - 6}" y="${sy0 + 10}" text-anchor="end">км/ц</text>`);
+    parts.push(`<text class="c-slab" x="${mL - 6}" y="${iy1}" text-anchor="end">Хөдөлгүүр</text>`);
+    parts.push(`<text class="c-slab" x="${mL - 6}" y="${py1}" text-anchor="end">Тэжээл</text>`);
     parts.push(`<rect class="c-strip-bg" x="${mL}" y="${iy0}" width="${plotW}" height="${stripH}" rx="2"/>`);
     parts.push(`<rect class="c-strip-bg" x="${mL}" y="${py0}" width="${plotW}" height="${stripH}" rx="2"/>`);
 
     const empty = i1 - i0 <= 0 && l1 - l0 <= 0;
     const noFuel = d.hasFuel === false;
     if (empty || noFuel) {
-      const msg = empty ? 'No data from this vehicle in this period' : 'This vehicle has no fuel sensor — only driving activity is shown';
+      const msg = empty ? 'Энэ хугацаанд энэ машинаас мэдээлэл ирээгүй' : 'Энэ машин түлшний мэдрэгчгүй — зөвхөн хөдөлгөөнийг харуулж байна';
       parts.push(`<text class="c-empty" x="${mL + plotW / 2}" y="${(fy0 + fy1) / 2}" text-anchor="middle">${msg}</text>`);
     }
 
@@ -294,7 +294,7 @@ export class FuelChart {
     }
     const fault = d.sensorOk === false; // stuck/faulty sensor: its "levels" are not reliable
     if (lvPath) parts.push(`<path class="c-level${fault ? ' fault' : ''}" d="${lvPath}"/>`);
-    if (fault && !noFuel) parts.push(`<text class="c-fault" x="${mL + 8}" y="${fy0 + 16}">Sensor fault — readings not reliable</text>`);
+    if (fault && !noFuel) parts.push(`<text class="c-fault" x="${mL + 8}" y="${fy0 + 16}">Мэдрэгчийн гэмтэл — заалт найдваргүй</text>`);
     parts.push(dots.join(''));
     parts.push('</g>');
 
@@ -315,7 +315,7 @@ export class FuelChart {
     b.push(`<line class="c-base" x1="${mL}" x2="${W - mR}" y1="${sy1}" y2="${sy1}"/>`);
     if (spPath) b.push(`<path class="c-speed" d="${spPath}"/>`);
     const ovs = Number(th.overspeedKmh);
-    if (isNum(ovs) && ovs < spMax) b.push(`<line class="c-ovs" x1="${mL}" x2="${W - mR}" y1="${r1(spy(ovs))}" y2="${r1(spy(ovs))}"><title>Speed limit ${ovs} km/h</title></line>`);
+    if (isNum(ovs) && ovs < spMax) b.push(`<line class="c-ovs" x1="${mL}" x2="${W - mR}" y1="${r1(spy(ovs))}" y2="${r1(spy(ovs))}"><title>Хурдны хязгаар ${ovs} км/ц</title></line>`);
     for (const [a, c] of runs(S, (s) => s[3] === 1, gapMs, i0, i1)) {
       const x0 = sx(a), x1 = Math.max(sx(c), x0 + 1.5);
       b.push(`<rect class="c-ign" x="${r1(x0)}" y="${iy0}" width="${r1(x1 - x0)}" height="${stripH}"/>`);
@@ -354,11 +354,11 @@ export class FuelChart {
       else if (kind === 'refuel') shape = `<path class="c-mk refuel" d="M${x - 6} ${y + 5}L${x + 6} ${y + 5}L${x} ${y - 6}Z"/>`;
       else if (sev === 'critical') shape = `<path class="c-mk critical" d="M${x} ${y - 6}L${x + 6} ${y}L${x} ${y + 6}L${x - 6} ${y}Z"/>`;
       else shape = `<circle class="c-mk ${sev}" cx="${x}" cy="${y}" r="4.5"/>`;
-      mk.push(`<g class="c-mk-g" data-i="${idx}" tabindex="0" role="button" aria-label="Alert">${shape}<circle class="c-hit" cx="${x}" cy="${y}" r="12"/></g>`);
+      mk.push(`<g class="c-mk-g" data-i="${idx}" tabindex="0" role="button" aria-label="Анхааруулга">${shape}<circle class="c-hit" cx="${x}" cy="${y}" r="12"/></g>`);
     });
     parts.push(mk.join(''));
 
-    const aria = `Fuel level chart, ${fmtFull(v0)} to ${fmtFull(v1)}. ${l1 - l0} trusted level readings, ${visAlerts.length} alerts.`;
+    const aria = `Түлшний түвшний график, ${fmtFull(v0)} – ${fmtFull(v1)}. Найдвартай заалт: ${l1 - l0}, анхааруулга: ${visAlerts.length}.`;
     this.wrap.innerHTML = `<svg class="fchart-el" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="group" aria-label="${aria.replace(/"/g, '')}">${parts.join('')}</svg>`;
     const svg = this.wrap.firstChild;
     this.geo = { W, H, mL, mR, plotW, fy0, fy1, py1, sx, fy, u, v0, v1, i0, i1, sensorMin, powerCut };
@@ -406,17 +406,17 @@ export class FuelChart {
       } else crossLv.setAttribute('visibility', 'hidden');
 
       const rows = [];
-      const fmtU = (mv) => `${fmtNum(g.u.of(mv), g.u.name === 'L' ? 0 : 1)}${g.u.name === 'L' ? ' L' : '%'}`;
+      const fmtU = (mv) => `${fmtNum(g.u.of(mv), g.u.name === 'L' ? 0 : 1)}${g.u.name === 'L' ? ' л' : '%'}`;
       rows.push(['time', fmtFull(tt)]);
-      if (lv) rows.push(['Trusted level', `${fmtU(lv[1])}`, `measured ${fmtClock(lv[0])}${new Date(lv[0]).toDateString() !== new Date(tt).toDateString() ? ' ' + fmtDayShort(lv[0]) : ''} · ${fmtNum(lv[1])} mV`, 'lv']);
+      if (lv) rows.push(['Найдвартай түвшин', `${fmtU(lv[1])}`, `хэмжсэн ${fmtClock(lv[0])}${new Date(lv[0]).toDateString() !== new Date(tt).toDateString() ? ' ' + fmtDayShort(lv[0]) : ''} · ${fmtNum(lv[1])} мВ`, 'lv']);
       if (s) {
-        if (rawValid) rows.push(['Raw reading', fmtU(s[1]), `${fmtNum(s[1])} mV${s[2] > 3 ? ' · moving, unreliable' : ''}`, 'raw']);
-        else if (s[4] !== null && s[4] < g.powerCut) rows.push(['Raw reading', 'Power off', s[1] !== null ? `${fmtNum(s[1])} mV` : '', 'raw']);
-        else rows.push(['Raw reading', 'No valid reading', s[1] !== null ? `${fmtNum(s[1])} mV` : '', 'raw']);
-        rows.push(['Speed', s[2] !== null ? `${fmtNum(s[2])} km/h` : '—']);
-        rows.push(['Engine', s[3] === 1 ? 'On' : s[3] === 0 ? 'Off' : '—']);
-        rows.push(['Power', s[4] !== null ? `${fmtNum(s[4] / 1000, 1)} V` : '—']);
-      } else rows.push(['', 'No data at this time']);
+        if (rawValid) rows.push(['Түүхий заалт', fmtU(s[1]), `${fmtNum(s[1])} мВ${s[2] > 3 ? ' · явж байгаа, найдваргүй' : ''}`, 'raw']);
+        else if (s[4] !== null && s[4] < g.powerCut) rows.push(['Түүхий заалт', 'Тэжээл унтраастай', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
+        else rows.push(['Түүхий заалт', 'Хүчинтэй заалт алга', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
+        rows.push(['Хурд', s[2] !== null ? `${fmtNum(s[2])} км/ц` : '—']);
+        rows.push(['Хөдөлгүүр', s[3] === 1 ? 'Асаалттай' : s[3] === 0 ? 'Унтраастай' : '—']);
+        rows.push(['Тэжээл', s[4] !== null ? `${fmtNum(s[4] / 1000, 1)} В` : '—']);
+      } else rows.push(['', 'Энэ үед мэдээлэл алга']);
       this.fillTip(rows);
       this.placeTip(cx);
     };
@@ -461,7 +461,7 @@ export class FuelChart {
         hide();
         const amt = fuelAmount(a.amountMv, this.d.cal, a.amountL);
         const rows = [['time', fmtFull(a.t)], ['alert', a.title || (this.d.typeLabel ? this.d.typeLabel(a.type) : a.type), '', a.severity]];
-        if (amt) rows.push([a.type === 'refuel' ? 'Added' : 'Amount', amt.main, amt.sub]);
+        if (amt) rows.push([a.type === 'refuel' ? 'Нэмэгдсэн' : 'Хэмжээ', amt.main, amt.sub]);
         if (a.detail) rows.push(['', String(a.detail).slice(0, 220)]);
         this.fillTip(rows);
         this.placeTip(g.sx(Number(a.t)));

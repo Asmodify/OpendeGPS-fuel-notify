@@ -8,6 +8,7 @@
 // - Alerts arriving close together are batched into one toast.
 import { spawn } from 'node:child_process';
 import { log, errText, fmtLocal } from './util.js';
+import { mnUnits } from './mn.js';
 
 // PowerShell AppUserModelID that can show toasts on Windows 10/11 without registering an app.
 const TOAST_APP_ID = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';
@@ -35,7 +36,7 @@ $n = [Windows.UI.Notifications.ToastNotification]::new($x)
 `;
 const TOAST_ENCODED = Buffer.from(TOAST_SCRIPT, 'utf16le').toString('base64');
 
-const SEV_LABEL = { critical: 'CRITICAL', warning: 'WARNING', info: 'INFO' };
+const SEV_LABEL = { critical: 'НОЦТОЙ', warning: 'СЭРЭМЖЛҮҮЛЭГ', info: 'МЭДЭЭЛЭЛ' };
 const SEV_RANK = { critical: 0, warning: 1, info: 2 };
 
 function channelStatus() {
@@ -117,9 +118,9 @@ export class Notifier {
       title = `${SEV_LABEL[a.severity] || ''} ${a.shortName || a.name || a.imei}: ${a.title}`.trim();
       body = a.detail || '';
     } else {
-      title = `${batch.length} new alerts${crit ? ` (${crit} critical)` : ''}`;
+      title = `${batch.length} шинэ анхааруулга${crit ? ` (${crit} ноцтой)` : ''}`;
       const lines = batch.slice(0, 5).map((a) => `${a.shortName || a.name || a.imei}: ${a.title}`);
-      if (batch.length > 5) lines.push(`... and ${batch.length - 5} more`);
+      if (batch.length > 5) lines.push(`... болон өөр ${batch.length - 5}`);
       body = lines.join('\n');
     }
     return {
@@ -206,16 +207,16 @@ export class Notifier {
     const s = this.getSettings();
     const now = Date.now();
     const sample = {
-      id: 0, imei: '', shortName: 'Test', name: 'Test', type: 'test', severity: 'warning', t: now,
-      title: 'Test notification', detail: `Fuel Tank Warner notifications are working (${fmtLocal(now, this.timezone)}).`,
+      id: 0, imei: '', shortName: 'Туршилт', name: 'Туршилт', type: 'test', severity: 'warning', t: now,
+      title: 'Туршилтын мэдэгдэл', detail: `Fuel Tank Warner-ийн мэдэгдэл ажиллаж байна (${mnUnits(fmtLocal(now, this.timezone))}).`,
     };
     const out = {};
-    if (process.platform !== 'win32') out.windowsToast = { ok: false, skipped: true, error: 'not running on Windows' };
-    else if (!s.windowsToast) out.windowsToast = { ok: false, skipped: true, error: 'Windows notifications are turned off in settings' };
+    if (process.platform !== 'win32') out.windowsToast = { ok: false, skipped: true, error: 'Windows дээр ажиллахгүй байна' };
+    else if (!s.windowsToast) out.windowsToast = { ok: false, skipped: true, error: 'Тохиргоонд Windows мэдэгдлийг унтраасан' };
     else out.windowsToast = await this.showToast(this.toastPayload([sample]));
     out.ok = Boolean(out.windowsToast.ok);
-    out.sent = out.windowsToast.ok ? ['Windows notification'] : [];
-    out.error = out.windowsToast.ok ? null : out.windowsToast.skipped ? 'Windows notifications are not available (turned off in settings, or not running on Windows).' : out.windowsToast.error;
+    out.sent = out.windowsToast.ok ? ['Windows мэдэгдэл'] : [];
+    out.error = out.windowsToast.ok ? null : out.windowsToast.skipped ? 'Windows мэдэгдэл боломжгүй (тохиргоонд унтраасан, эсвэл Windows дээр ажиллахгүй байна).' : out.windowsToast.error;
     return out;
   }
 

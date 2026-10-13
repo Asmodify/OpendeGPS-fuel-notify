@@ -10,6 +10,7 @@ import { Engine } from './engine.js';
 import { Ledger } from './ledger.js';
 import { Poller } from './poller.js';
 import { Notifier } from './notify.js';
+import { OpenTeeLink } from './opentee.js';
 import { SseHub } from './sse.js';
 import { createHandler } from './routes.js';
 import { log, setLogFile } from './util.js';
@@ -58,6 +59,9 @@ const api = createApi(cfg);
 const poller = new Poller({ cfg, api, engine, db, hub });
 ledger.onStatus = () => poller.broadcastStatus();
 ledger.start();
+// Open Tee (fleet app + admin web): fuel events are sent to its API when a key is configured
+const openTee = new OpenTeeLink({ cfg, engine, db });
+openTee.start();
 const server = http.createServer(createHandler({ cfg, engine, poller, notifier, hub, ledger }));
 server.keepAliveTimeout = 65000;
 
@@ -77,6 +81,7 @@ async function shutdown(code = 0, why = '') {
   log('info', `Shutting down${why ? ` (${why})` : ''}...`);
   try {
     await poller.stop();
+    await openTee.stop();
     notifier.close();
     hub.close();
     server.close();

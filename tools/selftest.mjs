@@ -99,7 +99,7 @@ function injectStep(samples, from, delta, rampMs) {
   const m2 = clone(base); injectStep(m2, t, -200, 10 * MIN);
   const d1 = fuelAlerts(runVehicle(o, m1), 'fuel_drain');
   const d2 = fuelAlerts(runVehicle(o, m2), 'fuel_drain');
-  check('350 mV drain caught (threshold 300)', d1.length === 1, describe(d1[0]));
+  check('350 mV drain caught (threshold 250)', d1.length === 1, describe(d1[0]));
   check('200 mV drop ignored (below threshold)', d2.length === 0, describe(d2[0]));
 }
 
@@ -318,6 +318,58 @@ const fake = { imei: 'TEST', name: 'TEST/Түлшний мэдрэгчтэй/', 
     { minutes: 60, every: 60, f: 700 },
   ]));
   check('low fuel: one alert on crossing 10%, no repeats', fuelAlerts(res, 'low_fuel').length === 1, describe(fuelAlerts(res, 'low_fuel')[0]));
+}
+
+// ---- 6b. stricter theft rules ------------------------------------------------------------
+{
+  // slow siphon: 100 mV taken every 3.5 h while parked (each step alone is below the threshold)
+  const step = (i) => 6000 - 100 * Math.min(5, Math.floor((i * 60) / (3.5 * 3600)));
+  const res = runVehicle(fake, synth([{ minutes: 20 * 60, every: 60, f: step }]));
+  const d = fuelAlerts(res, 'fuel_drain');
+  check('slow siphon (100 mV every 3.5 h) -> one drain', d.length === 1 && d[0].severity === 'critical', describe(d[0]));
+}
+{
+  // 800 mV drain, level back 2 h later: no longer a "sensor dip" (only a quick return is)
+  const res = runVehicle(fake, synth([
+    { minutes: 60, every: 60, f: 6000 },
+    { minutes: 120, every: 60, f: 5200 },
+    { minutes: 120, every: 60, f: 6000 },
+  ]));
+  const d = fuelAlerts(res, 'fuel_drain');
+  check('drain whose level returns after 2 h stays critical', d.length === 1 && d[0].severity === 'critical', describe(d[0]));
+}
+{
+  // 800 mV dip back within 20 min: still a sensor dip
+  const res = runVehicle(fake, synth([
+    { minutes: 60, every: 60, f: 6000 },
+    { minutes: 20, every: 60, f: 5200 },
+    { minutes: 120, every: 60, f: 6000 },
+  ]));
+  const d = fuelAlerts(res, 'fuel_drain');
+  check('quick 20 min dip -> downgraded to info', d.length === 1 && d[0].severity === 'info', describe(d[0]));
+}
+{
+  // 1500 mV taken, then filled above the old level 10 min later: drain stays, refuel recorded
+  const res = runVehicle(fake, synth([
+    { minutes: 60, every: 60, f: 6000 },
+    { minutes: 10, every: 60, f: 4500 },
+    { minutes: 120, every: 60, f: 9000 },
+  ]));
+  const d = fuelAlerts(res, 'fuel_drain');
+  const r = fuelAlerts(res, 'refuel');
+  check('drain covered by a refuel -> drain stays critical + refuel', d.length === 1 && d[0].severity === 'critical' && r.length === 1,
+    `${describe(d[0])} / ${describe(r[0])}`);
+}
+{
+  // refuel that starts right after stopping (before the level settles): measured from arrival
+  const res = runVehicle(fake, synth([
+    { minutes: 60, every: 10, spd: 50, f: 2000, ign: 1, pwr: 27800 },
+    { minutes: 2, every: 10, f: 2000, ign: 1, pwr: 27800 },
+    { minutes: 8, every: 10, f: (i, n) => 2000 + Math.round((6000 * i) / n), ign: 1, pwr: 27800 },
+    { minutes: 60, every: 60, f: 8000 },
+  ]));
+  const r = fuelAlerts(res, 'refuel');
+  check('refuel starting before the level settles -> full amount', r.length === 1 && Math.abs(r[0].amountMv - 6000) <= 300, describe(r[0]));
 }
 
 // ---- 7. restart: replay the last 12 h into a fresh detector -----------------------------

@@ -40,11 +40,11 @@ const HOUR = 3_600_000;
 export const ALERT_TYPES = {
   fuel_drain: { severity: 'critical', label: 'Fuel drain' },
   power_cut: { severity: 'critical', label: 'Tracker power cut' },
-  sensor_lost: { severity: 'warning', label: 'Fuel sensor fault' },
+  sensor_lost: { severity: 'critical', label: 'Fuel sensor fault' },
   low_fuel: { severity: 'warning', label: 'Low fuel' },
   long_idle: { severity: 'warning', label: 'Long idle' },
   overspeed: { severity: 'warning', label: 'Overspeed' },
-  offline: { severity: 'warning', label: 'Offline' },
+  offline: { severity: 'critical', label: 'Offline' },
   server_event: { severity: 'warning', label: 'GPS server event' },
   after_hours: { severity: 'warning', label: 'After-hours movement' },
   refuel: { severity: 'info', label: 'Refuel' },
@@ -54,8 +54,8 @@ export const ALERT_TYPES = {
 };
 
 export const DEFAULT_THRESHOLDS = {
-  drainParkedMv: 300,
-  drainTripMv: 600,
+  drainParkedMv: 250,
+  drainTripMv: 450,
   consumptionMvPerHour: 600,
   refuelMv: 300,
   sensorMinValidMv: 100,
@@ -84,8 +84,15 @@ const CONFIRM_MS = 5 * MIN; // an in-stop drop/rise must hold this long before a
 const SPARSE_GAP_MS = 20 * MIN; // readings this far apart = sparse (hourly "parked" reporting)
 const SPARSE_CONFIRM_MS = 2 * HOUR; // ...where a change needs 3 flat readings spanning this
 const EVENT_QUIET_MS = 15 * MIN; // an ongoing drain/refuel closes after this long without change
-const WATCH_MS = 6 * HOUR; // a closed parked drain stays watched (recovery / continuation)
-const REBASE_MS = 3 * HOUR; // slowly re-anchor the in-stop reference (thermal / idle creep)
+// A closed parked drain stays watched for the rest of the stop (continuation extends the same
+// alert; there is no time limit any more). Only a quick return of the level (a sensor/tilt dip)
+// may downgrade it, and only if the level does not end above where the drop started.
+const SENSOR_DIP_MS = 60 * MIN;
+const REBASE_MS = 3 * HOUR; // slowly re-anchor the in-stop reference (thermal / idle creep)...
+// ...but never past this share of the drain threshold below the stop's anchor level, so a slow
+// siphon (a little every few hours) still adds up to a drain
+const ANCHOR_DRIFT_SHARE = 0.5;
+const REFUEL_LOOKBACK_MS = 75 * MIN; // a refuel early in a stop is measured from the arrival readings
 const PIN_CONFIRM_MS = 45 * MIN; // a ceiling-level first reading after a drive must hold this long
 const PIN_RELEASE_MS = 15 * MIN; // ...and once it leaves the ceiling, let the probe drain this long
 const SLOPE_MV = 300; // extra margin when comparing levels from different parking spots
@@ -97,7 +104,7 @@ const DRIVE_OUT_MAX_MS = 60 * MIN; // a drive-out check must be settled within t
 const CONFIRM_TOL_MV = 300; // the confirming level may be at most this much above the estimate
 const SHORT_STOP_MS = 2 * MIN; // stops shorter than this are not judged on their own
 const BRIEF_SPREAD_MV = 200; // a few readings this close count as a brief level (master switch)
-const TRIP_HEADROOM = 1.5; // trip allowance = engine-hours x rate x this
+const TRIP_HEADROOM = 1.3; // trip allowance = engine-hours x rate x this
 const IDLE_BURN_FACTOR = 0.25; // idling burns this fraction of the driving rate
 const AVG_KMH = 40; // mV per km = mV per engine-hour / this (for distance driven unseen)
 const GAP_MS = 10 * MIN; // silence longer than this = data gap
@@ -472,7 +479,8 @@ export class VehicleDetector {
       pinReleasedAt: null,
       pending: null, // { type, since } in-stop drop/rise awaiting confirmation
       event: null, // ongoing drain/refuel alert
-      watch: null, // closed drain still watched { ev, until }
+      watch: null, // closed drain still watched for the rest of the stop { ev }
+      anchor: null, // level the stop's slow re-anchoring may not drift away from { level, t, engineMs }
       powerOffSinceRef: false,
       idle: null,
       // drive-in level estimates (for stops that never settle / master-switch stops)
@@ -954,14 +962,23 @@ export class VehicleDetector {
       return;
     }
 
-    const ref = stop.ref;
-    if (stop.watch && s.t > stop.watch.until) stop.watch = null;
-    const allowance = this.idleAllowance(ref, th);
-    const drop = ref.level - level;
+    let ref = stop.ref;
+    let allowance = this.idleAllowance(ref, th);
+    let drop = ref.level - level;
     let type = null;
-    if (stop.watch && level >= stop.watch.ev.fromLevel - th.drainParkedMv / 2 && level > ref.level + LEVEL_TOL_MV) type = 'recover';
+    const w = stop.watch;
+    if (w && level >= w.ev.fromLevel - th.drainParkedMv / 2 && level > ref.level + LEVEL_TOL_MV &&
+      s.t - w.ev.lastChangeT <= SENSOR_DIP_MS && level < w.ev.fromLevel + th.refuelMv) type = 'recover';
     else if (drop - allowance >= th.drainParkedMv) type = 'fuel_drain';
     else if (level - Math.min(ref.level, ref.low.level) >= th.refuelMv) type = 'refuel';
+    else if (stop.anchor && stop.anchor.level - level - this.idleAllowance(stop.anchor, th) >= th.drainParkedMv) {
+      // slow siphon: small losses re-anchored one by one add up since the stop's anchor
+      const a = stop.anchor;
+      ref = stop.ref = { level: a.level, t: a.t, lastRawT: a.t, engineMs: a.engineMs, low: ref.low };
+      allowance = this.idleAllowance(ref, th);
+      drop = ref.level - level;
+      type = 'fuel_drain';
+    }
     // Hourly reports: a change is trusted only once three readings spanning 2 h agree
     // (a two-reading dip is a common probe artefact on parked trucks).
     if (type && sparse && (weak || solidMs < SPARSE_CONFIRM_MS)) return;
@@ -973,7 +990,8 @@ export class VehicleDetector {
     if (!type) {
       stop.pending = null;
       // slow re-anchoring absorbs thermal drift and idle burn; theft is much faster
-      if (s.t - ref.t >= REBASE_MS && Math.abs(drop) < th.drainParkedMv / 2) {
+      const drift = stop.anchor ? stop.anchor.level - level - this.idleAllowance(stop.anchor, th) : 0;
+      if (s.t - ref.t >= REBASE_MS && Math.abs(drop) < th.drainParkedMv / 2 && drift < th.drainParkedMv * ANCHOR_DRIFT_SHARE) {
         stop.ref = { level, t: s.t, lastRawT: s.t, engineMs: this.engineMs, low: { level, t: s.t } };
         stop.powerOffSinceRef = false;
       }
@@ -989,6 +1007,7 @@ export class VehicleDetector {
   startRef(stop, s, level, t, th, cal) {
     const rough = this.roughMin;
     stop.ref = { level, t, lastRawT: t, engineMs: this.engineMs, low: { level, t } };
+    stop.anchor = { level, t, engineMs: this.engineMs };
     stop.powerOffSinceRef = false;
     stop.last = { level, t, ...this.mark() };
     this.setLevel(t, level, th, cal);
@@ -1006,6 +1025,19 @@ export class VehicleDetector {
     }
   }
 
+  // Lowest 3-point median of the stop's stationary readings before it settled (only early in
+  // the stop, when the first trusted level may already include part of a fill).
+  arrivalLevel(stop, t, th) {
+    if (!stop.anchor || stop.ref?.t !== stop.anchor.t || t - stop.startT > REFUEL_LOOKBACK_MS) return null;
+    const r = stop.early.filter((x) => x.t < stop.anchor.t && x.f >= th.sensorMinValidMv);
+    let best = null;
+    for (let i = 0; i + 2 < r.length; i++) {
+      const m = median([r[i].f, r[i + 1].f, r[i + 2].f]);
+      if (best == null || m < best.level) best = { level: m, t: r[i + 1].t };
+    }
+    return best;
+  }
+
   idleAllowance(ref, th) {
     return ((this.engineMs - ref.engineMs) / HOUR) * th.consumptionMvPerHour * IDLE_BURN_FACTOR;
   }
@@ -1015,8 +1047,16 @@ export class VehicleDetector {
     stop.pending = null;
     stop.watch = null;
     const fromLow = type === 'refuel' && ref.low.level < ref.level;
+    let fromLevel = fromLow ? ref.low.level : ref.level;
+    let fromT = fromLow ? ref.low.t : ref.lastRawT;
+    if (type === 'refuel') {
+      // the first settled level of a stop can already be part-way through the fill (the pump
+      // started while the level was still settling): measure from the arrival readings then
+      const arr = this.arrivalLevel(stop, s.t, th);
+      if (arr && arr.level < fromLevel - LEVEL_TOL_MV) ({ level: fromLevel, t: fromT } = arr);
+    }
     const ev = {
-      type, fromLevel: fromLow ? ref.low.level : ref.level, fromT: fromLow ? ref.low.t : ref.lastRawT,
+      type, fromLevel, fromT,
       extreme: level, lastChangeT: s.t, powerOff: stop.powerOffSinceRef, allowance, atDeparture, id: null,
     };
     if (type === 'refuel') {
@@ -1045,9 +1085,18 @@ export class VehicleDetector {
       return;
     }
     if (ev.type === 'fuel_drain' && level >= ev.fromLevel - th.drainParkedMv / 2) {
+      if (level >= ev.fromLevel + th.refuelMv) {
+        // more fuel than before the drop: a refuel on top of it, not a sensor dip. The drain
+        // stays; measure the refuel from the bottom of the drop.
+        this.closeEvent(stop);
+        stop.watch = null;
+        stop.ref = { level: ev.extreme, t: ev.lastChangeT, lastRawT: ev.lastChangeT, engineMs: this.engineMs, low: { level: ev.extreme, t: ev.lastChangeT } };
+        stop.anchor = { level: ev.extreme, t: ev.lastChangeT, engineMs: this.engineMs };
+        return;
+      }
       // the level came back: more likely a tilt/sensor artefact than a loss
       stop.event = null;
-      stop.watch = { ev, until: s.t };
+      stop.watch = { ev };
       this.recoverDrain(stop, s, level, th, cal);
       return;
     }
@@ -1061,10 +1110,11 @@ export class VehicleDetector {
     this.update(ev.id, detail ? { ongoing: false, detail } : { ongoing: false });
     // a closed drain stays watched: its level may come back (sensor dip) or keep falling
     // (slow siphon), which updates this alert instead of raising new ones
-    if (ev.type === 'fuel_drain' && this.last) stop.watch = { ev, until: this.last.t + WATCH_MS };
+    if (ev.type === 'fuel_drain') stop.watch = { ev };
     if (stop.last) {
       const { level, t, engineMs } = stop.last;
       stop.ref = { level, t, lastRawT: t, engineMs, low: { level, t } };
+      stop.anchor = { level, t, engineMs };
     }
     stop.powerOffSinceRef = false;
   }
@@ -1082,6 +1132,7 @@ export class VehicleDetector {
         'so this was most likely a sensor or tilt artefact, not a loss.',
     });
     stop.ref = { level, t: s.t, lastRawT: s.t, engineMs: this.engineMs, low: { level, t: s.t } };
+    stop.anchor = { level, t: s.t, engineMs: this.engineMs };
     stop.powerOffSinceRef = false;
   }
 
@@ -1348,7 +1399,11 @@ export class VehicleDetector {
         const [x0, y0] = tb[i - 1];
         if (mv <= x1) return x1 === x0 ? y1 : y0 + ((mv - x0) * (y1 - y0)) / (x1 - x0);
       }
-      return tb[tb.length - 1][1];
+      // above the top point: full tanks read past it (see ledger.js aboveTableTop)
+      const [x0, y0] = tb[tb.length - 2];
+      const [x1, y1] = tb[tb.length - 1];
+      const m = Math.min(mv, Math.max(x1, 10000));
+      return x1 === x0 ? y1 : y1 + ((m - x1) * (y1 - y0)) / (x1 - x0);
     }
     if (!cal.tankLiters) return null;
     return (Math.max(0, Math.min(100, this.pct(mv, cal))) / 100) * cal.tankLiters;

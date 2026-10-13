@@ -1,12 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="mn">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <title>Fuel Tank Warner</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231c5cab'/%3E%3Cpath d='M16 6s-7 7.6-7 12.6a7 7 0 0 0 14 0C23 13.6 16 6 16 6z' fill='%23fff'/%3E%3C/svg%3E">
+  <title>GPS түлшний хяналт · Open Teever</title>
+  <link rel="icon" href="mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==" crossorigin="anonymous" referrerpolicy="no-referrer">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="style.css">
   <script>
     // Apply a saved theme choice before first paint (auto = follow the OS).
@@ -59,32 +62,39 @@
     </defs>
   </svg>
 
-  <header class="topbar">
-    <a class="brand" href="#/fleet" aria-label="Fuel Tank Warner home">
-      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3s-6.5 7-6.5 11.6a6.5 6.5 0 0 0 13 0C18.5 10 12 3 12 3z"/></svg></span>
-      <span class="brand-text">Fuel Tank Warner</span>
+  <aside class="sidebar" aria-label="Цэс">
+    <a class="brand" href="#/fleet" aria-label="Open Teever — GPS түлшний хяналт, нүүр">
+      <span class="logo" aria-hidden="true"><img src="mark.svg" alt=""></span>
+      <span class="brand-text"><b>Open Teever</b><small>GPS түлшний хяналт</small></span>
     </a>
-    <nav class="tabs" aria-label="Views">
-      <a href="#/fleet" data-view="fleet"><svg class="ic"><use href="#i-truck"/></svg><span>Fleet</span></a>
-      <a href="#/map" data-view="map"><svg class="ic"><use href="#i-map"/></svg><span>Map</span></a>
-      <a href="#/alerts" data-view="alerts"><svg class="ic"><use href="#i-bell"/></svg><span>Alerts</span><b class="tab-badge" id="tab-badge" hidden></b></a>
-      <a href="#/report" data-view="report"><svg class="ic"><use href="#i-report"/></svg><span>Report</span></a>
-      <a href="#/settings" data-view="settings"><svg class="ic"><use href="#i-sliders"/></svg><span>Settings</span></a>
+    <div class="nav-label">Түлшний хяналт</div>
+    <nav class="tabs" aria-label="Цэс">
+      <a href="#/fleet" data-view="fleet"><svg class="ic"><use href="#i-truck"/></svg><span>Машинууд</span></a>
+      <a href="#/map" data-view="map"><svg class="ic"><use href="#i-map"/></svg><span>Газрын зураг</span></a>
+      <a href="#/alerts" data-view="alerts"><svg class="ic"><use href="#i-bell"/></svg><span>Анхааруулга</span><b class="tab-badge" id="tab-badge" hidden></b></a>
+      <a href="#/report" data-view="report"><svg class="ic"><use href="#i-report"/></svg><span>Тайлан</span></a>
+      <a href="#/settings" data-view="settings"><svg class="ic"><use href="#i-sliders"/></svg><span>Тохиргоо</span></a>
     </nav>
+    <div class="sidebar-foot"><span class="muted small">Опендевелопмент ХХК</span></div>
+  </aside>
+
+  <div class="shell">
+  <header class="topbar">
+    <h1 class="page-title" id="page-title">Машинууд</h1>
     <div class="top-right">
-      <div class="conn" id="conn" data-state="connecting" title="Connection to the Fuel Tank Warner server">
-        <i class="dot" aria-hidden="true"></i><span id="conn-text">Connecting…</span>
+      <div class="conn" id="conn" data-state="connecting" title="Сервертэй холболт">
+        <i class="dot" aria-hidden="true"></i><span id="conn-text">Холбогдож байна…</span>
       </div>
-      <button class="count crit zero" id="cnt-crit" type="button" title="Unacknowledged critical alerts">
-        <svg class="ic"><use href="#i-octagon"/></svg><b>0</b><span class="count-lab">critical</span>
+      <button class="count crit zero" id="cnt-crit" type="button" title="Танилцаагүй ноцтой анхааруулга">
+        <svg class="ic"><use href="#i-octagon"/></svg><b>0</b><span class="count-lab">ноцтой</span>
       </button>
-      <button class="count warn zero" id="cnt-warn" type="button" title="Unacknowledged warnings">
-        <svg class="ic"><use href="#i-triangle"/></svg><b>0</b><span class="count-lab">warnings</span>
+      <button class="count warn zero" id="cnt-warn" type="button" title="Танилцаагүй сэрэмжлүүлэг">
+        <svg class="ic"><use href="#i-triangle"/></svg><b>0</b><span class="count-lab">сэрэмжлүүлэг</span>
       </button>
-      <button class="icon-btn" id="btn-notif" type="button" title="Browser pop-up notifications"><svg class="ic"><use href="#i-bell-off"/></svg></button>
-      <button class="icon-btn" id="btn-sound" type="button" title="Alarm sound for critical alerts"><svg class="ic"><use href="#i-volume"/></svg></button>
-      <button class="icon-btn" id="btn-test" type="button" title="Send a test notification"><svg class="ic"><use href="#i-send"/></svg></button>
-      <button class="icon-btn cloud-only" id="btn-logout" type="button" title="Sign out" aria-label="Sign out"><svg class="ic"><use href="#i-logout"/></svg></button>
+      <button class="icon-btn" id="btn-notif" type="button" title="Хөтчийн гарч ирэх мэдэгдэл"><svg class="ic"><use href="#i-bell-off"/></svg></button>
+      <button class="icon-btn" id="btn-sound" type="button" title="Ноцтой анхааруулгын дуут дохио"><svg class="ic"><use href="#i-volume"/></svg></button>
+      <button class="icon-btn" id="btn-test" type="button" title="Туршилтын мэдэгдэл илгээх"><svg class="ic"><use href="#i-send"/></svg></button>
+      <button class="icon-btn cloud-only" id="btn-logout" type="button" title="Гарах" aria-label="Гарах"><svg class="ic"><use href="#i-logout"/></svg></button>
     </div>
   </header>
 
@@ -92,33 +102,35 @@
 
   <main id="main">
     <!-- FLEET -->
-    <section class="view" id="view-fleet" hidden aria-label="Fleet">
+    <section class="view" id="view-fleet" hidden aria-label="Машинууд">
       <div class="tiles" id="fleet-tiles"></div>
       <div class="filters">
-        <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="f-q" type="search" placeholder="Search name, plate, IMEI…" autocomplete="off" aria-label="Search vehicles"></label>
-        <select id="f-group" aria-label="Group"><option value="">All groups</option></select>
-        <select id="f-status" aria-label="Status">
-          <option value="">Any status</option>
-          <option value="moving">Moving</option>
-          <option value="idle">Idle (engine on)</option>
-          <option value="parked">Parked</option>
-          <option value="offline">Offline</option>
+        <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="f-q" type="search" placeholder="Нэр, улсын дугаар, IMEI хайх…" autocomplete="off" aria-label="Машин хайх"></label>
+        <select id="f-group" aria-label="Бүлэг"><option value="">Бүх бүлэг</option></select>
+        <select id="f-status" aria-label="Төлөв">
+          <option value="">Бүх төлөв</option>
+          <option value="moving">Явж байна</option>
+          <option value="idle">Асаалттай зогссон</option>
+          <option value="parked">Зогсоолд</option>
+          <option value="offline">Холбогдоогүй</option>
         </select>
-        <label class="chk"><input type="checkbox" id="f-fuel"> Fuel sensor</label>
-        <label class="chk"><input type="checkbox" id="f-problems"> Only with problems</label>
+        <label class="chk"><input type="checkbox" id="f-fuel"> Түлшний мэдрэгчтэй</label>
+        <label class="chk"><input type="checkbox" id="f-problems"> Зөвхөн асуудалтай</label>
+        <label class="chk"><input type="checkbox" id="f-gps"> GPS ажиллахгүй</label>
         <span class="filter-count" id="f-count"></span>
+        <a class="btn" id="f-xlsx" href="/api/export/fleet-status.xlsx" download title="Бүх машины Excel жагсаалт: GPS ажиллаж байгаа эсэх, түлшний мэдрэгч ажиллаж байгаа эсвэл гэмтэлтэй эсэх"><svg class="ic"><use href="#i-download"/></svg>Төлвийн Excel</a>
       </div>
       <div class="card table-card">
         <table class="tbl fleet-tbl">
           <thead>
             <tr>
-              <th class="c-name"><button type="button" data-sort="name">Vehicle</button></th>
-              <th class="c-group"><button type="button" data-sort="group">Group</button></th>
-              <th class="c-status"><button type="button" data-sort="status">Status</button></th>
-              <th class="c-fuel"><button type="button" data-sort="fuel">Fuel</button></th>
-              <th class="c-speed num"><button type="button" data-sort="speed">Speed</button></th>
-              <th class="c-seen"><button type="button" data-sort="seen">Last report</button></th>
-              <th class="c-alerts"><button type="button" data-sort="alerts">Alerts</button></th>
+              <th class="c-name"><button type="button" data-sort="name">Машин</button></th>
+              <th class="c-group"><button type="button" data-sort="group">Бүлэг</button></th>
+              <th class="c-status"><button type="button" data-sort="status">Төлөв</button></th>
+              <th class="c-fuel"><button type="button" data-sort="fuel">Түлш</button></th>
+              <th class="c-speed num"><button type="button" data-sort="speed">Хурд</button></th>
+              <th class="c-seen"><button type="button" data-sort="seen">Сүүлийн мэдээ</button></th>
+              <th class="c-alerts"><button type="button" data-sort="alerts">Анхааруулга</button></th>
             </tr>
           </thead>
           <tbody id="fleet-body"></tbody>
@@ -128,157 +140,185 @@
     </section>
 
     <!-- MAP -->
-    <section class="view" id="view-map" hidden aria-label="Map">
+    <section class="view" id="view-map" hidden aria-label="Газрын зураг">
       <div class="map-wrap card">
         <div id="map" class="map"></div>
         <div class="map-tools">
-          <div class="seg" id="map-filter" role="group" aria-label="Show on map">
-            <button type="button" data-f="all" aria-pressed="true">All</button>
-            <button type="button" data-f="problems" aria-pressed="false">Problems</button>
-            <button type="button" data-f="moving" aria-pressed="false">Moving</button>
-            <button type="button" data-f="idle" aria-pressed="false">Idle</button>
-            <button type="button" data-f="parked" aria-pressed="false">Parked</button>
-            <button type="button" data-f="offline" aria-pressed="false">Offline</button>
+          <div class="seg" id="map-filter" role="group" aria-label="Газрын зурагт харуулах">
+            <button type="button" data-f="all" aria-pressed="true">Бүгд</button>
+            <button type="button" data-f="problems" aria-pressed="false">Асуудалтай</button>
+            <button type="button" data-f="moving" aria-pressed="false">Явж байна</button>
+            <button type="button" data-f="idle" aria-pressed="false">Асаалттай зогссон</button>
+            <button type="button" data-f="parked" aria-pressed="false">Зогсоолд</button>
+            <button type="button" data-f="offline" aria-pressed="false">Холбогдоогүй</button>
           </div>
-          <label class="chk map-chk"><input type="checkbox" id="map-names"> Names</label>
-          <button type="button" class="btn small" id="map-fit"><svg class="ic"><use href="#i-expand"/></svg>Fit all</button>
+          <label class="chk map-chk"><input type="checkbox" id="map-names"> Нэр</label>
+          <button type="button" class="btn small" id="map-fit"><svg class="ic"><use href="#i-expand"/></svg>Бүгдийг харуулах</button>
         </div>
-        <div class="map-legend" aria-label="Legend">
-          <span><i class="mk-dot moving"></i>Moving</span>
-          <span><i class="mk-dot idle"></i>Idle</span>
-          <span><i class="mk-dot parked"></i>Parked</span>
-          <span><i class="mk-dot offline"></i>Offline</span>
-          <span><i class="mk-dot ring-critical"></i>Critical alert</span>
-          <span><i class="mk-dot ring-warning"></i>Warning</span>
+        <div class="map-legend" aria-label="Тайлбар">
+          <span><i class="mk-dot moving"></i>Явж байна</span>
+          <span><i class="mk-dot idle"></i>Асаалттай зогссон</span>
+          <span><i class="mk-dot parked"></i>Зогсоолд</span>
+          <span><i class="mk-dot offline"></i>Холбогдоогүй</span>
+          <span><i class="mk-dot ring-critical"></i>Ноцтой анхааруулга</span>
+          <span><i class="mk-dot ring-warning"></i>Сэрэмжлүүлэг</span>
         </div>
         <div class="map-error" id="map-error" hidden></div>
       </div>
     </section>
 
     <!-- ALERTS -->
-    <section class="view" id="view-alerts" hidden aria-label="Alerts">
+    <section class="view" id="view-alerts" hidden aria-label="Анхааруулга">
       <div class="filters">
-        <div class="seg" id="a-sev" role="group" aria-label="Severity">
-          <button type="button" data-sev="critical" aria-pressed="true"><i class="sdot critical"></i>Critical</button>
-          <button type="button" data-sev="warning" aria-pressed="true"><i class="sdot warning"></i>Warning</button>
-          <button type="button" data-sev="info" aria-pressed="true"><i class="sdot info"></i>Info</button>
+        <div class="seg" id="a-sev" role="group" aria-label="Зэрэглэл">
+          <button type="button" data-sev="critical" aria-pressed="true"><i class="sdot critical"></i>Ноцтой</button>
+          <button type="button" data-sev="warning" aria-pressed="true"><i class="sdot warning"></i>Сэрэмжлүүлэг</button>
+          <button type="button" data-sev="info" aria-pressed="true"><i class="sdot info"></i>Мэдээлэл</button>
         </div>
-        <select id="a-type" aria-label="Alert type"><option value="">All types</option></select>
-        <select id="a-veh" aria-label="Vehicle"><option value="">All vehicles</option></select>
-        <select id="a-range" aria-label="Time range">
-          <option value="24">Last 24 hours</option>
-          <option value="72">Last 3 days</option>
-          <option value="168">Last 7 days</option>
-          <option value="720">Last 30 days</option>
-          <option value="2160">Last 90 days</option>
+        <select id="a-type" aria-label="Анхааруулгын төрөл"><option value="">Бүх төрөл</option></select>
+        <select id="a-veh" aria-label="Машин"><option value="">Бүх машин</option></select>
+        <select id="a-range" aria-label="Хугацаа">
+          <option value="24">Сүүлийн 24 цаг</option>
+          <option value="72">Сүүлийн 3 хоног</option>
+          <option value="168">Сүүлийн 7 хоног</option>
+          <option value="720">Сүүлийн 30 хоног</option>
+          <option value="2160">Сүүлийн 90 хоног</option>
         </select>
-        <label class="chk"><input type="checkbox" id="a-unacked"> Unacknowledged only</label>
+        <label class="chk"><input type="checkbox" id="a-unacked"> Зөвхөн танилцаагүй</label>
         <span class="spacer"></span>
-        <button type="button" class="btn" id="a-refresh" title="Reload"><svg class="ic"><use href="#i-refresh"/></svg><span class="hide-sm">Refresh</span></button>
-        <button type="button" class="btn" id="a-ackall"><svg class="ic"><use href="#i-check-all"/></svg>Acknowledge all</button>
+        <button type="button" class="btn" id="a-refresh" title="Дахин ачаалах"><svg class="ic"><use href="#i-refresh"/></svg><span class="hide-sm">Шинэчлэх</span></button>
+        <a class="btn" id="a-xlsx" href="/api/export/alerts.xlsx" download title="Шүүлтүүрт тохирох бүх анхааруулгыг (дэлгэц дээр ачаалагдаагүйг ч бас) Excel файлаар татах"><svg class="ic"><use href="#i-download"/></svg>Excel<span class="hide-sm">&nbsp;татах</span></a>
+        <button type="button" class="btn" id="a-ackall"><svg class="ic"><use href="#i-check-all"/></svg>Бүгдтэй танилцлаа</button>
       </div>
       <div id="a-temp" class="temp-view" role="status" hidden></div>
       <div id="alert-list" class="alert-list"></div>
-      <div class="more-row"><button type="button" class="btn" id="a-more" hidden>Load older alerts</button></div>
+      <div class="more-row"><button type="button" class="btn" id="a-more" hidden>Өмнөх анхааруулгыг ачаалах</button></div>
     </section>
 
     <!-- REPORT -->
-    <section class="view" id="view-report" hidden aria-label="Report">
+    <section class="view" id="view-report" hidden aria-label="Тайлан">
       <div class="filters">
-        <div class="seg" id="r-period" role="group" aria-label="Period">
-          <button type="button" data-h="24" aria-pressed="true">Last 24 hours</button>
-          <button type="button" data-h="168" aria-pressed="false">Last 7 days</button>
+        <div class="seg" id="r-period" role="group" aria-label="Хугацаа">
+          <button type="button" data-h="24" aria-pressed="true">Сүүлийн 24 цаг</button>
+          <button type="button" data-h="168" aria-pressed="false">Сүүлийн 7 хоног</button>
+          <button type="button" data-h="720" aria-pressed="false">Сүүлийн 30 хоног</button>
+          <button type="button" data-h="1440" aria-pressed="false">Сүүлийн 60 хоног</button>
         </div>
-        <select id="r-group" aria-label="Group"><option value="">All groups</option></select>
-        <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="r-q" type="search" placeholder="Search vehicle…" autocomplete="off" aria-label="Search vehicles"></label>
-        <label class="chk"><input type="checkbox" id="r-fuel" checked> Fuel sensor only</label>
+        <select id="r-group" aria-label="Бүлэг"><option value="">Бүх бүлэг</option></select>
+        <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="r-q" type="search" placeholder="Машин хайх…" autocomplete="off" aria-label="Машин хайх"></label>
+        <label class="chk"><input type="checkbox" id="r-fuel" checked> Зөвхөн түлшний мэдрэгчтэй</label>
         <span class="spacer"></span>
-        <button type="button" class="btn" id="r-refresh" title="Reload"><svg class="ic"><use href="#i-refresh"/></svg><span class="hide-sm">Refresh</span></button>
-        <button type="button" class="btn" id="r-csv"><svg class="ic"><use href="#i-download"/></svg>Export CSV</button>
+        <button type="button" class="btn" id="r-refresh" title="Дахин ачаалах"><svg class="ic"><use href="#i-refresh"/></svg><span class="hide-sm">Шинэчлэх</span></button>
+        <button type="button" class="btn" id="r-csv"><svg class="ic"><use href="#i-download"/></svg>CSV татах</button>
       </div>
       <div class="card excel-card" id="r-excel" aria-labelledby="r-excel-title">
         <span class="excel-ico" aria-hidden="true"><svg class="ic"><use href="#i-sheet"/></svg></span>
         <div class="excel-main">
-          <b id="r-excel-title">Excel fuel ledger</b> <span class="muted">— every refuel and suspected fuel theft since the program started watching</span>
-          <div class="excel-status" id="r-excel-status" role="status">Loading…</div>
+          <b id="r-excel-title">Excel түлшний бүртгэл</b> <span class="muted">— программ хянаж эхэлснээс хойшхи бүх цэнэглэлт ба түлшний хулгайн сэжиг</span>
+          <div class="excel-status" id="r-excel-status" role="status">Ачаалж байна…</div>
         </div>
         <div class="excel-actions">
-          <a class="btn primary" id="r-xlsx" href="/api/export/fuel-events.xlsx" download><svg class="ic"><use href="#i-download"/></svg>Download Excel</a>
-          <button type="button" class="btn local-only" id="r-excel-folder" hidden><svg class="ic"><use href="#i-folder"/></svg>Open folder</button>
+          <a class="btn primary" id="r-xlsx" href="/api/export/fuel-events.xlsx" download><svg class="ic"><use href="#i-download"/></svg>Excel татах</a>
+          <button type="button" class="btn local-only" id="r-excel-folder" hidden><svg class="ic"><use href="#i-folder"/></svg>Хавтас нээх</button>
         </div>
+      </div>
+      <div class="card receipts-card" id="r-receipts" aria-labelledby="r-rc-title">
+        <div class="excel-card rc-head">
+          <span class="excel-ico" aria-hidden="true"><svg class="ic"><use href="#i-fuel"/></svg></span>
+          <div class="excel-main">
+            <b id="r-rc-title">Түлшний баримтын шалгалт</b> <span class="muted">— шатахуун түгээх станцын баримт дээрх литр ба савд бодитоор орсон литр</span>
+            <div class="excel-status" id="r-rc-status" role="status">Ачаалж байна…</div>
+          </div>
+          <div class="excel-actions">
+            <div class="seg small" id="r-rc-filter" role="group" aria-label="Баримт харуулах">
+              <button type="button" data-f="problems" aria-pressed="true">Асуудалтай</button>
+              <button type="button" data-f="all" aria-pressed="false">Бүгд</button>
+            </div>
+            <button type="button" class="btn primary" id="r-rc-toggle" aria-expanded="false" aria-controls="r-rc-add"><svg class="ic"><use href="#i-sheet"/></svg>Баримт нэмэх</button>
+          </div>
+        </div>
+        <div class="rc-add" id="r-rc-add" hidden>
+          <label for="r-rc-text" class="help">Excel дээр баримтын мөрүүдийг сонгоод (машин, огноо, литр — бусад багана болон гарчгийн мөр байж болно) хуулж (Ctrl+C), энд буулгана уу (Ctrl+V).</label>
+          <textarea id="r-rc-text" rows="6" spellcheck="false" placeholder="1234ӨМЕ	2026-09-15	430"></textarea>
+          <div class="rc-actions">
+            <button type="button" class="btn primary" id="r-rc-import"><svg class="ic"><use href="#i-check"/></svg>Баримт шалгах</button>
+            <span class="rc-msg" id="r-rc-msg" role="status"></span>
+          </div>
+        </div>
+        <div class="rc-list" id="r-rc-list"></div>
       </div>
       <div class="tiles report-tiles" id="r-tiles"></div>
       <div class="card table-card">
         <table class="tbl report-tbl">
           <thead>
             <tr>
-              <th class="c-name"><button type="button" data-sort="name">Vehicle</button></th>
-              <th class="c-group"><button type="button" data-sort="group">Group</button></th>
-              <th class="num"><button type="button" data-sort="distance">Distance</button></th>
-              <th class="num c-eng"><button type="button" data-sort="engine">Engine hours</button></th>
-              <th class="num"><button type="button" data-sort="used">Fuel used</button></th>
-              <th class="num c-rate"><button type="button" data-sort="rate">Per 100 km</button></th>
-              <th class="num c-refuel"><button type="button" data-sort="refuel">Refuelled</button></th>
-              <th class="num"><button type="button" data-sort="drain">Suspected loss</button></th>
-              <th class="c-ralerts"><button type="button" data-sort="alerts">Alerts</button></th>
+              <th class="c-name"><button type="button" data-sort="name">Машин</button></th>
+              <th class="c-group"><button type="button" data-sort="group">Бүлэг</button></th>
+              <th class="num"><button type="button" data-sort="distance">Туулсан зам</button></th>
+              <th class="num c-eng"><button type="button" data-sort="engine">Хөдөлгүүрийн цаг</button></th>
+              <th class="num"><button type="button" data-sort="used">Зарцуулсан түлш</button></th>
+              <th class="num c-rate"><button type="button" data-sort="rate">100 км-т</button></th>
+              <th class="num c-refuel"><button type="button" data-sort="refuel">Цэнэглэсэн</button></th>
+              <th class="num"><button type="button" data-sort="drain">Сэжигтэй алдагдал</button></th>
+              <th class="c-ralerts"><button type="button" data-sort="alerts">Анхааруулга</button></th>
             </tr>
           </thead>
           <tbody id="r-body"></tbody>
         </table>
         <div class="empty-state" id="r-empty" hidden></div>
       </div>
-      <p class="note">Fuel figures use only settled readings taken while vehicles were parked, because readings jump around while driving. “Suspected loss” is the total of fuel-drain alerts. Litres are shown for vehicles with a tank size set in Settings; others show % of tank.</p>
+      <p class="note">Түлшний дүнд зөвхөн машин зогсож байх үеийн тогтворжсон заалтыг ашигладаг, учир нь явж байхад заалт үсэрдэг. “Сэжигтэй алдагдал” нь түлш алдагдлын анхааруулгын нийлбэр. Тохиргоонд савны хэмжээ оруулсан машинд литрээр, бусдад савны %-иар харуулна.</p>
     </section>
 
     <!-- SETTINGS -->
-    <section class="view" id="view-settings" hidden aria-label="Settings">
+    <section class="view" id="view-settings" hidden aria-label="Тохиргоо">
       <div class="settings-grid">
         <form class="card pad" id="s-rules" novalidate>
-          <h2>Alert rules</h2>
-          <p class="lead">When should the system warn you? These apply to every vehicle unless a vehicle has its own rules (open a vehicle → Settings). Changes take effect immediately.</p>
-          <div id="s-rules-fields"><p class="muted">Loading…</p></div>
+          <h2>Анхааруулгын дүрэм</h2>
+          <p class="lead">Систем хэзээ анхааруулах вэ? Машин өөрийн дүрэмгүй бол бүх машинд үйлчилнэ (машиныг нээгээд → Тохиргоо). Өөрчлөлт шууд хэрэгжинэ.</p>
+          <div id="s-rules-fields"><p class="muted">Ачаалж байна…</p></div>
           <div class="form-actions sticky-actions">
-            <button type="submit" class="btn primary">Save rules</button>
-            <button type="button" class="btn" id="s-rules-reset">Undo changes</button>
+            <button type="submit" class="btn primary">Дүрэм хадгалах</button>
+            <button type="button" class="btn" id="s-rules-reset">Өөрчлөлтийг буцаах</button>
             <span class="save-state" id="s-rules-state" role="status"></span>
           </div>
         </form>
 
         <div class="settings-col">
           <form class="card pad local-only" id="s-notify" novalidate>
-            <h2>Notifications from the server</h2>
-            <p class="lead">Sent by the program running on this computer, even when no browser is open. Historical alerts (found while catching up on old data) are never sent.</p>
-            <label class="switch"><input type="checkbox" name="windowsToast"><span>Windows desktop pop-ups</span></label>
+            <h2>Серверийн мэдэгдэл</h2>
+            <p class="lead">Энэ компьютер дээр ажиллаж буй программ хөтөч нээлттэй биш байсан ч илгээнэ. Түүхэн анхааруулгыг (хуучин мэдээллийг нөхөх үед олдсон) хэзээ ч илгээхгүй.</p>
+            <label class="switch"><input type="checkbox" name="windowsToast"><span>Windows-ийн гарч ирэх мэдэгдэл</span></label>
             <fieldset class="sev-fieldset">
-              <legend>Send for</legend>
-              <label class="chk"><input type="checkbox" name="sev" value="critical"> Critical</label>
-              <label class="chk"><input type="checkbox" name="sev" value="warning"> Warnings</label>
-              <label class="chk"><input type="checkbox" name="sev" value="info"> Info (refuels, back online…)</label>
+              <legend>Илгээх зэрэглэл</legend>
+              <label class="chk"><input type="checkbox" name="sev" value="critical"> Ноцтой</label>
+              <label class="chk"><input type="checkbox" name="sev" value="warning"> Сэрэмжлүүлэг</label>
+              <label class="chk"><input type="checkbox" name="sev" value="info"> Мэдээлэл (цэнэглэлт, дахин холбогдсон…)</label>
             </fieldset>
             <div class="form-actions">
-              <button type="submit" class="btn primary">Save notifications</button>
-              <button type="button" class="btn" id="s-test"><svg class="ic"><use href="#i-send"/></svg>Send test</button>
+              <button type="submit" class="btn primary">Мэдэгдлийн тохиргоо хадгалах</button>
+              <button type="button" class="btn" id="s-test"><svg class="ic"><use href="#i-send"/></svg>Турших</button>
               <span class="save-state" id="s-notify-state" role="status"></span>
             </div>
           </form>
 
           <div class="card pad" id="s-browser">
-            <h2>This browser</h2>
-            <p class="lead">Pop-ups and sound while this page is open. Saved only in this browser.</p>
+            <h2>Энэ хөтөч</h2>
+            <p class="lead">Энэ хуудас нээлттэй байх үеийн гарч ирэх мэдэгдэл ба дуу. Зөвхөн энэ хөтөчид хадгалагдана.</p>
             <div class="row-between">
-              <div><b>Pop-up notifications</b><div class="help" id="s-perm"></div><div class="help" id="s-perm-note" hidden></div></div>
-              <button type="button" class="btn" id="s-perm-btn">Enable</button>
+              <div><b>Гарч ирэх мэдэгдэл</b><div class="help" id="s-perm"></div><div class="help" id="s-perm-note" hidden></div></div>
+              <button type="button" class="btn" id="s-perm-btn">Асаах</button>
             </div>
-            <label class="switch"><input type="checkbox" id="s-sound"><span>Alarm sound for critical alerts</span></label>
-            <button type="button" class="btn small" id="s-sound-test"><svg class="ic"><use href="#i-volume"/></svg>Play sound</button>
+            <label class="switch"><input type="checkbox" id="s-sound"><span>Ноцтой анхааруулгын дуут дохио</span></label>
+            <button type="button" class="btn small" id="s-sound-test"><svg class="ic"><use href="#i-volume"/></svg>Дуу тоглуулах</button>
             <fieldset class="sev-fieldset">
-              <legend>Pop up for</legend>
-              <label class="chk"><input type="checkbox" name="bsev" value="critical"> Critical</label>
-              <label class="chk"><input type="checkbox" name="bsev" value="warning"> Warnings</label>
-              <label class="chk"><input type="checkbox" name="bsev" value="info"> Info</label>
+              <legend>Гарч ирэх зэрэглэл</legend>
+              <label class="chk"><input type="checkbox" name="bsev" value="critical"> Ноцтой</label>
+              <label class="chk"><input type="checkbox" name="bsev" value="warning"> Сэрэмжлүүлэг</label>
+              <label class="chk"><input type="checkbox" name="bsev" value="info"> Мэдээлэл</label>
             </fieldset>
-            <label class="field inline"><span>Theme</span>
-              <select id="s-theme"><option value="auto">Automatic</option><option value="light">Light</option><option value="dark">Dark</option></select>
+            <label class="field inline"><span>Өнгө</span>
+              <select id="s-theme"><option value="auto">Автомат</option><option value="light">Цайвар</option><option value="dark">Бараан</option></select>
             </label>
           </div>
         </div>
@@ -286,17 +326,17 @@
         <div class="card pad wide" id="s-vehicles">
           <div class="row-between wrap">
             <div>
-              <h2>Fuel sensor calibration &amp; mute</h2>
-              <p class="lead">Enter the sensor reading (mV) when the tank is empty and when it is full, and the tank size, to see litres instead of percent. Default 0 – 10 000 mV covers the whole sensor range. Muted vehicles still record alerts but send no notifications.</p>
+              <h2>Түлшний мэдрэгчийн тохируулга ба мэдэгдэл хаах</h2>
+              <p class="lead">Хувь биш литрээр харахын тулд сав хоосон ба дүүрэн үеийн мэдрэгчийн заалт (мВ) болон савны хэмжээг оруулна уу. Анхны утга 0 – 10 000 мВ нь мэдрэгчийн бүх хүрээг хамарна. Мэдэгдлийг нь хаасан машин анхааруулгаа бүртгэсээр байх боловч мэдэгдэл илгээхгүй.</p>
             </div>
           </div>
           <div class="filters compact">
-            <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="sv-q" type="search" placeholder="Search vehicle…" autocomplete="off" aria-label="Search vehicles"></label>
-            <label class="chk"><input type="checkbox" id="sv-all"> Include vehicles without fuel sensor</label>
+            <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="sv-q" type="search" placeholder="Машин хайх…" autocomplete="off" aria-label="Машин хайх"></label>
+            <label class="chk"><input type="checkbox" id="sv-all"> Түлшний мэдрэгчгүй машиныг оруулах</label>
           </div>
           <div class="table-scroll">
             <table class="tbl cal-tbl">
-              <thead><tr><th>Vehicle</th><th class="num">Level now</th><th class="num">Empty (mV)</th><th class="num">Full (mV)</th><th class="num">Tank (L)</th><th>Mute</th><th>Own rules</th><th></th></tr></thead>
+              <thead><tr><th>Машин</th><th class="num">Одоогийн түвшин</th><th class="num">Хоосон (мВ)</th><th class="num">Дүүрэн (мВ)</th><th class="num">Сав (л)</th><th>Мэдэгдэл хаах</th><th>Өөрийн дүрэм</th><th></th></tr></thead>
               <tbody id="sv-body"></tbody>
             </table>
           </div>
@@ -304,6 +344,7 @@
       </div>
     </section>
   </main>
+  </div>
 
   <!-- VEHICLE DETAIL DRAWER -->
   <div id="drawer" class="drawer" hidden>
@@ -311,42 +352,44 @@
     <section class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="d-title">
       <header class="d-head">
         <div class="d-titles">
-          <h2 id="d-title">Vehicle</h2>
+          <h2 id="d-title">Машин</h2>
           <div class="d-sub" id="d-sub"></div>
         </div>
-        <button type="button" class="icon-btn" data-close aria-label="Close vehicle details" id="d-close"><svg class="ic"><use href="#i-x"/></svg></button>
+        <button type="button" class="icon-btn" data-close aria-label="Машины дэлгэрэнгүйг хаах" id="d-close"><svg class="ic"><use href="#i-x"/></svg></button>
       </header>
       <div class="d-body" id="d-body">
         <div id="d-stats" class="d-stats"></div>
         <div class="card d-chart-card">
           <div class="d-chart-head">
-            <h3>Fuel level</h3>
-            <div class="seg small" id="d-range" role="group" aria-label="Chart period">
-              <button type="button" data-h="24" aria-pressed="true">24 h</button>
-              <button type="button" data-h="48" aria-pressed="false">48 h</button>
-              <button type="button" data-h="168" aria-pressed="false">7 days</button>
+            <h3>Түлшний түвшин</h3>
+            <div class="seg small" id="d-range" role="group" aria-label="Графикийн хугацаа">
+              <button type="button" data-h="24" aria-pressed="true">24 ц</button>
+              <button type="button" data-h="48" aria-pressed="false">48 ц</button>
+              <button type="button" data-h="168" aria-pressed="false">7 хоног</button>
+              <button type="button" data-h="720" aria-pressed="false">30 хоног</button>
+              <button type="button" data-h="1440" aria-pressed="false">60 хоног</button>
             </div>
-            <button type="button" class="btn small" id="d-zoomreset" hidden><svg class="ic"><use href="#i-expand"/></svg>Show whole period</button>
+            <button type="button" class="btn small" id="d-zoomreset" hidden><svg class="ic"><use href="#i-expand"/></svg>Бүх хугацааг харуулах</button>
           </div>
-          <div class="legend" aria-label="Chart legend">
-            <span><i class="lg-level"></i>Trusted level (settled, parked)</span>
-            <span><i class="lg-raw"></i>Raw sensor reading</span>
-            <span><i class="lg-drain"></i>Fuel drain</span>
-            <span><i class="lg-refuel"></i>Refuel</span>
-            <span><i class="lg-nosig"></i>No sensor reading</span>
-            <span><i class="lg-ign"></i>Engine on</span>
-            <span><i class="lg-pwroff"></i>Power off</span>
+          <div class="legend" aria-label="Графикийн тайлбар">
+            <span><i class="lg-level"></i>Найдвартай түвшин (тогтворжсон, зогсоолд)</span>
+            <span><i class="lg-raw"></i>Мэдрэгчийн түүхий заалт</span>
+            <span><i class="lg-drain"></i>Түлш алдагдал</span>
+            <span><i class="lg-refuel"></i>Цэнэглэлт</span>
+            <span><i class="lg-nosig"></i>Мэдрэгчийн заалтгүй</span>
+            <span><i class="lg-ign"></i>Хөдөлгүүр асаалттай</span>
+            <span><i class="lg-pwroff"></i>Тэжээл унтраастай</span>
           </div>
-          <div id="d-chart" class="d-chart"><div class="chart-loading">Loading history…</div></div>
-          <p class="help chart-help">Readings jump while driving on rough roads, so the bold line only uses steady readings taken while parked. Drag across the chart to zoom in; double-click to zoom out.</p>
+          <div id="d-chart" class="d-chart"><div class="chart-loading">Түүхийг ачаалж байна…</div></div>
+          <p class="help chart-help">Муу замаар явахад заалт үсэрдэг тул тод шугам нь зөвхөн зогсоолд авсан тогтвортой заалтыг ашигладаг. Томруулахын тулд график дээгүүр чирнэ үү; жижигрүүлэхдээ давхар дарна уу.</p>
           <details class="levels-table">
-            <summary>Show trusted readings as a table</summary>
+            <summary>Найдвартай заалтыг хүснэгтээр харуулах</summary>
             <div id="d-levels"></div>
           </details>
         </div>
         <div class="d-two">
           <div class="card pad">
-            <div class="row-between"><h3>Alerts in this period</h3><a class="link" id="d-all-alerts" href="#/alerts">All alerts for this vehicle</a></div>
+            <div class="row-between"><h3>Энэ хугацааны анхааруулга</h3><a class="link" id="d-all-alerts" href="#/alerts">Энэ машины бүх анхааруулга</a></div>
             <div id="d-alerts" class="d-alerts"></div>
           </div>
           <div class="card d-map-card">
@@ -361,14 +404,13 @@
 
   <div id="toasts" class="toasts" aria-live="assertive"></div>
 
-  <!-- Sign-in (cloud version only: shown when the server answers "login required") -->
+  <!-- Sign-in (cloud version, or the server install with DASHBOARD_PASSWORD: shown on "login required") -->
   <div class="login-screen" id="login" hidden>
     <form class="card pad login-card" id="login-form" novalidate>
-      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3s-6.5 7-6.5 11.6a6.5 6.5 0 0 0 13 0C18.5 10 12 3 12 3z"/></svg></span>
-      <h1>Fuel Tank Warner</h1>
-      <label class="field"><span>Password</span><input type="password" name="password" id="login-pw" autocomplete="current-password" required></label>
+      <img class="login-mark" src="mark.svg" alt=""><h1>GPS түлшний хяналт</h1>
+      <label class="field"><span>Нууц үг</span><input type="password" name="password" id="login-pw" autocomplete="current-password" required></label>
       <p class="login-err" id="login-err" role="alert"></p>
-      <button type="submit" class="btn primary" id="login-btn">Sign in</button>
+      <button type="submit" class="btn primary" id="login-btn">Нэвтрэх</button>
     </form>
   </div>
 

@@ -27,6 +27,8 @@ export function recStateOf(rec) {
     hold: rec.hold ?? null,
     offline: typeof rec.offline === 'boolean' ? rec.offline : null,
     offlineFrom: fin(rec.offlineFrom),
+    outage: rec.outage ?? null,
+    gps: rec.gps ?? null,
     afterHoursNight: rec.afterHoursNight ?? null,
     polledLevelT: fin(rec.polledLevelT),
     fetchedSeen: fin(rec.fetchedSeen),
@@ -48,6 +50,8 @@ function applyRecState(rec, s) {
   rec.hold = s.hold ?? null;
   rec.offline = typeof s.offline === 'boolean' ? s.offline : undefined;
   rec.offlineFrom = fin(s.offlineFrom);
+  rec.outage = isPlainObject(s.outage) && Number.isFinite(s.outage.from) ? s.outage : null;
+  rec.gps = isPlainObject(s.gps) ? s.gps : null;
   rec.afterHoursNight = s.afterHoursNight ?? null;
   rec.polledLevelT = fin(s.polledLevelT);
   rec.fetchedSeen = fin(s.fetchedSeen);
@@ -120,6 +124,19 @@ export class CloudEngine extends Engine {
 
   /** The detector snapshot keeps learned consumption rates; nothing else to save. */
   saveLearned() {}
+
+  // Fuel receipts: the cloud shows the check in the dashboard and the Excel ledger only. Its
+  // ticks do not load the refuel history, so no receipt alerts are raised here, and the stored
+  // levels are not at hand to tell "no data" days apart (dataFrom is set by the request).
+  checkReceipts() {}
+
+  receiptHasData() {
+    return null;
+  }
+
+  receiptDataFrom() {
+    return Number.isFinite(this.dataFrom) ? this.dataFrom : null;
+  }
 
   checkIntervalMinutes() {
     return checkIntervalOf(this.db.getSetting('global', {}));

@@ -1,0 +1,12 @@
+.git
+node_modules
+data
+data-backup*
+testdata
+evidence
+*.xlsx
+*.db*
+*.log
+config.local.json
+calibrations.json
+.env*

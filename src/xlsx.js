@@ -122,14 +122,21 @@ function safeUrl(url) {
 
 // ---- styles --------------------------------------------------------------------------------
 const BUILTIN_FMTS = { General: 0, '0': 1, '0.00': 2, '#,##0': 3, '#,##0.00': 4, '0%': 9, '0.00%': 10, '@': 49 };
-const FONT = { normal: 0, bold: 1, link: 2, title: 3, boldLink: 4 };
+const FONT = { normal: 0, bold: 1, link: 2, title: 3, boldLink: 4, good: 5, bad: 6, warn: 7 };
 const FONTS_XML = [
   '<font><sz val="11"/><name val="Calibri"/><family val="2"/></font>',
   '<font><b/><sz val="11"/><name val="Calibri"/><family val="2"/></font>',
   `<font><u/><sz val="11"/><color rgb="${LINK_COLOR}"/><name val="Calibri"/><family val="2"/></font>`,
   '<font><b/><sz val="14"/><name val="Calibri"/><family val="2"/></font>',
   `<font><b/><u/><sz val="11"/><color rgb="${LINK_COLOR}"/><name val="Calibri"/><family val="2"/></font>`,
+  '<font><b/><sz val="11"/><color rgb="FF006100"/><name val="Calibri"/><family val="2"/></font>',
+  '<font><b/><sz val="11"/><color rgb="FF9C0006"/><name val="Calibri"/><family val="2"/></font>',
+  '<font><b/><sz val="11"/><color rgb="FF7F5F00"/><name val="Calibri"/><family val="2"/></font>',
 ];
+// cell tones (column option `tone`): Excel's "Good" / "Bad" / "Neutral" colours
+const TONE_FILL = { good: 3, bad: 4, warn: 5 };
+const TONE_FILLS_XML = ['FFC6EFCE', 'FFFFC7CE', 'FFFFEB9C']
+  .map((rgb) => `<fill><patternFill patternType="solid"><fgColor rgb="${rgb}"/><bgColor indexed="64"/></patternFill></fill>`);
 
 class Styles {
   constructor() {
@@ -146,14 +153,16 @@ class Styles {
     return this.fmts.get(code);
   }
 
-  /** xf index for { numFmt, font, header, wrap }. */
-  get({ numFmt = null, font = 'normal', header = false, wrap = false }) {
+  /** xf index for { numFmt, font, header, wrap, tone }. */
+  get({ numFmt = null, font = 'normal', header = false, wrap = false, tone = null }) {
     const fmt = this.fmtId(numFmt);
-    const key = `${fmt}|${font}|${header ? 1 : 0}|${wrap ? 1 : 0}`;
+    const t = TONE_FILL[tone] ? tone : null;
+    const key = `${fmt}|${font}|${header ? 1 : 0}|${wrap ? 1 : 0}|${t || ''}`;
     let i = this.xfIndex.get(key);
     if (i === undefined) {
       i = this.xfs.length;
-      this.xfs.push({ fmt, font: FONT[font] ?? 0, fill: header ? 2 : 0, border: header ? 1 : 0, wrap, header });
+      const fontId = t && (font === 'normal' || font === 'bold') ? FONT[t] : FONT[font] ?? 0;
+      this.xfs.push({ fmt, font: fontId, fill: header ? 2 : t ? TONE_FILL[t] : 0, border: header ? 1 : 0, wrap, header });
       this.xfIndex.set(key, i);
     }
     return i;
@@ -174,8 +183,8 @@ class Styles {
       + `<styleSheet xmlns="${NS_MAIN}">`
       + (fmts.length ? `<numFmts count="${fmts.length}">${fmts.join('')}</numFmts>` : '')
       + `<fonts count="${FONTS_XML.length}">${FONTS_XML.join('')}</fonts>`
-      + '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
-      + `<fill><patternFill patternType="solid"><fgColor rgb="${HEADER_FILL}"/><bgColor indexed="64"/></patternFill></fill></fills>`
+      + `<fills count="${3 + TONE_FILLS_XML.length}"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>`
+      + `<fill><patternFill patternType="solid"><fgColor rgb="${HEADER_FILL}"/><bgColor indexed="64"/></patternFill></fill>${TONE_FILLS_XML.join('')}</fills>`
       + '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
       + '<border><left/><right/><top/><bottom style="thin"><color rgb="FF8EA9DB"/></bottom><diagonal/></border></borders>'
       + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
@@ -303,7 +312,7 @@ function buildSheet(sheet, index, ctx) {
   let rowNo = 0; // 0-based index of the next row to write
   let maxCol = -1;
 
-  const cellXml = (r, c, cell, { bold = false, header = false, wrap = false, title = false } = {}) => {
+  const cellXml = (r, c, cell, { bold = false, header = false, wrap = false, title = false, tone = null } = {}) => {
     const ref = cellRef(r, c);
     if (c > maxCol) maxCol = c;
     let font = title ? 'title' : bold ? 'bold' : 'normal';
@@ -314,7 +323,7 @@ function buildSheet(sheet, index, ctx) {
       }
       cell = { kind: 's', v: cell.v };
     }
-    const s = styles.get({ numFmt: cell.kind === 'n' ? cell.fmt : null, font, header, wrap });
+    const s = styles.get({ numFmt: cell.kind === 'n' ? cell.fmt : null, font, header, wrap, tone });
     const sAttr = s ? ` s="${s}"` : '';
     if (cell.kind === 'n') return `<c r="${ref}"${sAttr}><v>${numText(cell.v)}</v></c>`;
     if (cell.kind === 'b') return `<c r="${ref}"${sAttr} t="b"><v>${cell.v ? 1 : 0}</v></c>`;
@@ -358,7 +367,15 @@ function buildSheet(sheet, index, ctx) {
         const cell = resolveCell(row[c], col, tz);
         if (!cell) continue;
         if (c < widths.length) widths[c] = Math.max(widths[c], displayLen(cell));
-        cells.push(cellXml(rowNo, c, cell, { wrap: !!col.wrap }));
+        let tone = null;
+        if (typeof col.tone === 'function') {
+          try {
+            tone = col.tone(row[c], row);
+          } catch {
+            tone = null;
+          }
+        }
+        cells.push(cellXml(rowNo, c, cell, { wrap: !!col.wrap, tone }));
       }
       pushRow(cells);
     }
@@ -421,6 +438,8 @@ function buildSheet(sheet, index, ctx) {
     + '<sheetFormatPr defaultRowHeight="15"/>'
     + (colsXml.length ? `<cols>${colsXml.join('')}</cols>` : '')
     + `<sheetData>${rowsXml.join('')}</sheetData>`
+    // read-only: cells cannot be edited; sorting, filtering and column widths still work
+    + (ctx.protectHash ? `<sheetProtection password="${ctx.protectHash}" sheet="1" objects="1" scenarios="1" formatColumns="0" sort="0" autoFilter="0"/>` : '')
     + (filterRef ? `<autoFilter ref="${filterRef}"/>` : '')
     + (links.length ? `<hyperlinks>${links.map((l, i) => `<hyperlink ref="${l.ref}" r:id="rId${i + 1}"/>`).join('')}</hyperlinks>` : '')
     + '<pageMargins left="0.5" right="0.5" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>'
@@ -438,11 +457,25 @@ function buildSheet(sheet, index, ctx) {
   return { xml, rels, filterAbs, printTitles };
 }
 
+/** Excel's legacy sheet/workbook protection password hash (ECMA-376 Part 1, 18.3.1.85), 4 hex digits. */
+export function legacyPasswordHash(pw) {
+  const s = String(pw).slice(0, 15);
+  let h = 0;
+  for (let i = s.length - 1; i >= 0; i--) {
+    h = ((h >> 14) & 1) | ((h << 1) & 0x7fff);
+    h ^= s.charCodeAt(i) & 0xff;
+  }
+  h = ((h >> 14) & 1) | ((h << 1) & 0x7fff);
+  h ^= s.length;
+  h ^= 0xce4b;
+  return h.toString(16).toUpperCase().padStart(4, '0');
+}
+
 // ---- package -------------------------------------------------------------------------------
 /**
  * Build a complete .xlsx file.
  *
- * sheets: [{ name, columns: [{ header, width?, type?, numFmt?, wrap? }], rows: [[value, ...]],
+ * sheets: [{ name, columns: [{ header, width?, type?, numFmt?, wrap?, tone? }], rows: [[value, ...]],
  *            freezeHeader?, autoFilter?, totalRow?: [value, ...], titleLines?: [line, ...],
  *            tabColor?: 'RRGGBB', width?: number (info sheet column A),
  *            orientation?: 'portrait' | 'landscape' (printing; tables default to landscape),
@@ -451,13 +484,17 @@ function buildSheet(sheet, index, ctx) {
  *   values: null/undefined/'' -> empty; datetime/date: epoch ms UTC (or Date, or local
  *   'YYYY-MM-DD[ HH:MM]' string); link: { text, url } (http/https/mailto only, else plain text).
  *   titleLines: strings or { text, bold?, title?, url?, wrap? }; line 0 is the title; '' = blank.
- * opts: { tzOffsetMinutes = 480, creator, title }
+ *   tone: (value, row) => 'good' | 'bad' | 'warn' | null — colours a data cell (green / red / amber).
+ * opts: { tzOffsetMinutes = 480, creator, title, protect }
+ *   protect: true (random password nobody knows) or a password string: every sheet is
+ *   read-only and sheets cannot be added, removed or renamed.
  */
 export function buildXlsx(sheets, opts = {}) {
   const tz = Number.isFinite(opts.tzOffsetMinutes) ? opts.tzOffsetMinutes : 480;
   const strings = new SharedStrings();
   const styles = new Styles();
-  const ctx = { strings, styles, tz };
+  const pw = opts.protect === true ? crypto.randomBytes(12).toString('base64') : typeof opts.protect === 'string' && opts.protect ? opts.protect : null;
+  const ctx = { strings, styles, tz, protectHash: pw ? legacyPasswordHash(pw) : null };
   const list = Array.isArray(sheets) && sheets.length ? sheets : [{ name: 'Sheet1', titleLines: [] }];
 
   const used = new Set();
@@ -517,6 +554,7 @@ export function buildXlsx(sheets, opts = {}) {
   add('xl/workbook.xml', XML_HEAD
     + `<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_R}">`
     + '<workbookPr/>'
+    + (ctx.protectHash ? `<workbookProtection workbookPassword="${ctx.protectHash}" lockStructure="1"/>` : '')
     + '<bookViews><workbookView xWindow="0" yWindow="0" windowWidth="28800" windowHeight="15000" activeTab="0"/></bookViews>'
     + `<sheets>${built.map((s, i) => `<sheet name="${escAttr(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>`
     + (defined.length
