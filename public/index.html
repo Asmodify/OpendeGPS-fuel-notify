@@ -4,9 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <title>Fuel Tank Warner</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231c5cab'/%3E%3Cpath d='M16 6s-7 7.6-7 12.6a7 7 0 0 0 14 0C23 13.6 16 6 16 6z' fill='%23fff'/%3E%3C/svg%3E">
+  <title>GPS түлшний хяналт · Open Teever</title>
+  <link rel="icon" href="mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==" crossorigin="anonymous" referrerpolicy="no-referrer">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="style.css">
   <script>
     // Apply a saved theme choice before first paint (auto = follow the OS).
@@ -59,11 +62,12 @@
     </defs>
   </svg>
 
-  <header class="topbar">
-    <a class="brand" href="#/fleet" aria-label="Fuel Tank Warner нүүр">
-      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3s-6.5 7-6.5 11.6a6.5 6.5 0 0 0 13 0C18.5 10 12 3 12 3z"/></svg></span>
-      <span class="brand-text">Fuel Tank Warner</span>
+  <aside class="sidebar" aria-label="Цэс">
+    <a class="brand" href="#/fleet" aria-label="Open Teever — GPS түлшний хяналт, нүүр">
+      <span class="logo" aria-hidden="true"><img src="mark.svg" alt=""></span>
+      <span class="brand-text"><b>Open Teever</b><small>GPS түлшний хяналт</small></span>
     </a>
+    <div class="nav-label">Түлшний хяналт</div>
     <nav class="tabs" aria-label="Цэс">
       <a href="#/fleet" data-view="fleet"><svg class="ic"><use href="#i-truck"/></svg><span>Машинууд</span></a>
       <a href="#/map" data-view="map"><svg class="ic"><use href="#i-map"/></svg><span>Газрын зураг</span></a>
@@ -71,8 +75,14 @@
       <a href="#/report" data-view="report"><svg class="ic"><use href="#i-report"/></svg><span>Тайлан</span></a>
       <a href="#/settings" data-view="settings"><svg class="ic"><use href="#i-sliders"/></svg><span>Тохиргоо</span></a>
     </nav>
+    <div class="sidebar-foot"><span class="muted small">Опендевелопмент ХХК</span></div>
+  </aside>
+
+  <div class="shell">
+  <header class="topbar">
+    <h1 class="page-title" id="page-title">Машинууд</h1>
     <div class="top-right">
-      <div class="conn" id="conn" data-state="connecting" title="Fuel Tank Warner сервертэй холболт">
+      <div class="conn" id="conn" data-state="connecting" title="Сервертэй холболт">
         <i class="dot" aria-hidden="true"></i><span id="conn-text">Холбогдож байна…</span>
       </div>
       <button class="count crit zero" id="cnt-crit" type="button" title="Танилцаагүй ноцтой анхааруулга">
@@ -334,6 +344,7 @@
       </div>
     </section>
   </main>
+  </div>
 
   <!-- VEHICLE DETAIL DRAWER -->
   <div id="drawer" class="drawer" hidden>
@@ -393,11 +404,10 @@
 
   <div id="toasts" class="toasts" aria-live="assertive"></div>
 
-  <!-- Sign-in (cloud version only: shown when the server answers "login required") -->
+  <!-- Sign-in (cloud version, or the server install with DASHBOARD_PASSWORD: shown on "login required") -->
   <div class="login-screen" id="login" hidden>
     <form class="card pad login-card" id="login-form" novalidate>
-      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3s-6.5 7-6.5 11.6a6.5 6.5 0 0 0 13 0C18.5 10 12 3 12 3z"/></svg></span>
-      <h1>Fuel Tank Warner</h1>
+      <img class="login-mark" src="mark.svg" alt=""><h1>GPS түлшний хяналт</h1>
       <label class="field"><span>Нууц үг</span><input type="password" name="password" id="login-pw" autocomplete="current-password" required></label>
       <p class="login-err" id="login-err" role="alert"></p>
       <button type="submit" class="btn primary" id="login-btn">Нэвтрэх</button>

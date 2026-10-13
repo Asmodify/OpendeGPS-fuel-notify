@@ -288,7 +288,7 @@ function renderBanners() {
   }
   if (S.serverDown) {
     out.push(S.mode === 'cloud'
-      ? b('critical', 'server', 'Fuel Tank Warner сервертэй холбогдож чадахгүй байна.', 'Интернэт холболтоо шалгана уу. Автоматаар дахин оролдож байна…')
+      ? b('critical', 'server', 'GPS түлшний хяналтын сервертэй холбогдож чадахгүй байна.', 'Интернэт холболтоо шалгана уу. Автоматаар дахин оролдож байна…')
       : b('critical', 'server', 'Энэ компьютер дээрх Fuel Tank Warner программтай холбогдож чадахгүй байна.', 'Программ ажиллаж байгаа эсэхийг шалгана уу (start.bat). Автоматаар дахин оролдож байна…'));
   } else if (S.status) {
     const st = S.status;
@@ -358,7 +358,7 @@ function renderCounts() {
   tb.hidden = !(c + w);
   tb.textContent = c + w > 99 ? '99+' : String(c + w);
   tb.classList.toggle('crit', c > 0);
-  document.title = (c ? `(${c}) ` : '') + 'Fuel Tank Warner';
+  document.title = (c ? `(${c}) ` : '') + 'GPS түлшний хяналт · Open Teever';
 }
 
 // ---------------------------------------------------------------- notifications & sound
@@ -503,6 +503,7 @@ async function loadMeta() {
     if (m && m.alertTypes && typeof m.alertTypes === 'object') S.meta.alertTypes = { ...FALLBACK_TYPES, ...m.alertTypes };
     if (m && Array.isArray(m.groups)) S.meta.groups = m.groups;
     if (m && (m.mode === 'cloud' || m.mode === 'local')) S.mode = m.mode;
+    if (m) S.auth = !!m.auth;
     if (m && m.features && typeof m.features === 'object') S.features = { ...S.features, ...m.features };
     if (m && isNum(m.serverTimeMs)) S.skew = Number(m.serverTimeMs) - Date.now();
     if (Math.abs(S.skew) < 5000) S.skew = 0;
@@ -806,6 +807,8 @@ function showView(view) {
     else a.removeAttribute('aria-current');
   });
   document.body.dataset.view = view;
+  const tab = $(`.tabs a[data-view="${view}"] span`);
+  if (tab) $('#page-title').textContent = tab.textContent;
   if (view === 'fleet') renderFleet();
   if (view === 'map') { renderMap(); setTimeout(() => mapObj?.invalidateSize(), 50); }
   if (view === 'alerts') { syncAlertControls(); if (!S.alerts.loaded || Date.now() - (S.alerts.loadedAt || 0) > 60e3) loadAlerts(); else renderAlerts(); }
@@ -1426,7 +1429,7 @@ async function downloadExcel(link) {
     } catch {
       throw new Error('Сервертэй холбогдож чадахгүй байна');
     }
-    if (res.status === 401 && S.mode === 'cloud') { showLogin(); throw new Error('Дахин нэвтэрнэ үү.'); }
+    if (res.status === 401 && (S.mode === 'cloud' || S.auth)) { showLogin(); throw new Error('Дахин нэвтэрнэ үү.'); }
     if (!res.ok) {
       let msg = `Серверийн алдаа (HTTP ${res.status})`;
       try { const j = await res.json(); if (j && j.error) msg = j.error; } catch { /* not JSON */ }
@@ -2578,6 +2581,7 @@ async function init() {
   await loadMeta();
   if (S.needLogin) return; // the sign-in screen reloads the page once signed in
   document.body.classList.toggle('mode-cloud', S.mode === 'cloud');
+  document.body.classList.toggle('has-login', !!S.auth);
   await Promise.all([loadSettings(), loadStatus()]);
   await loadVehicles();
   populateSelects();

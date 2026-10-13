@@ -1,4 +1,5 @@
 // HTTP API (JSON) + static dashboard files from public/.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HttpError } from './engine.js';
@@ -71,6 +72,59 @@ function attachment(name) {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
+// ---- sign-in (server install): DASHBOARD_PASSWORD + SESSION_SECRET turn it on --------------
+const COOKIE = 'ftw_session';
+const SESSION_DAYS = 30;
+const LOGIN_MAX_FAILS = 10; // per IP within LOGIN_WINDOW_MS
+const LOGIN_WINDOW_MS = 15 * 60e3;
+const digest = (x) => crypto.createHash('sha256').update(String(x)).digest();
+const sameSecret = (a, b) => typeof a === 'string' && typeof b === 'string' && !!a && !!b && crypto.timingSafeEqual(digest(a), digest(b));
+
+function cookieOf(req, name) {
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return null;
+}
+
+function makeAuth(cfg) {
+  const password = cfg.dashboardPassword;
+  if (!password) return null;
+  const secret = cfg.sessionSecret || crypto.randomBytes(32).toString('hex'); // (sessions end on restart)
+  const hmac = (x) => crypto.createHmac('sha256', secret).update(x).digest('base64url');
+  const fails = new Map(); // ip -> [times]
+  const secure = cfg.cookieSecure ? '; Secure' : '';
+  return {
+    cookie: (value, maxAge) => `${COOKIE}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure}`,
+    make(now = Date.now()) {
+      const exp = Math.floor(now / 1000) + SESSION_DAYS * 86400;
+      return `${exp}.${hmac(`ftw1.${exp}`)}`;
+    },
+    valid(req, now = Date.now()) {
+      const m = /^(\d{9,12})\.([A-Za-z0-9_-]{43})$/.exec(String(cookieOf(req, COOKIE) || ''));
+      return !!m && Number(m[1]) * 1000 > now && sameSecret(m[2], hmac(`ftw1.${m[1]}`));
+    },
+    check(ip, pw, now = Date.now()) {
+      const list = (fails.get(ip) || []).filter((t) => now - t < LOGIN_WINDOW_MS);
+      if (list.length >= LOGIN_MAX_FAILS) throw new HttpError(429, 'Хэт олон удаа буруу оролдлоо. 15 минутын дараа дахин оролдоно уу.');
+      if (sameSecret(String(pw ?? ''), password)) { fails.delete(ip); return true; }
+      list.push(now);
+      fails.set(ip, list);
+      if (fails.size > 10000) fails.clear();
+      return false;
+    },
+  };
+}
+
+function clientIp(req, trustProxy) {
+  if (trustProxy) {
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (xff) return xff;
+  }
+  return req.socket?.remoteAddress || 'unknown';
+}
+
 const isLoopback = (addr) => /^(127\.|::1$|::ffff:127\.)/.test(String(addr || ''));
 
 const intParam = (v) => {
@@ -84,6 +138,8 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger }) {
   const publicDir = path.resolve(cfg.publicDir);
   const loopbackOnly = ['127.0.0.1', 'localhost', '::1'].includes(cfg.host);
   const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+  const auth = makeAuth(cfg);
+  const onServer = process.platform !== 'win32';
 
   function guard(req, url) {
     // Bound to this computer only: refuse other Host names (DNS-rebinding protection).
@@ -118,6 +174,16 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger }) {
       throw new HttpError(400, 'bad path');
     }
 
+    if (auth) {
+      if (m === 'POST' && p === '/api/login') {
+        const body = await readJson(req, 4096);
+        if (!auth.check(clientIp(req, cfg.trustProxy), body?.password)) throw new HttpError(401, 'Нууц үг буруу байна');
+        return send(res, 200, { ok: true }, { 'set-cookie': auth.cookie(auth.make(), SESSION_DAYS * 86400) });
+      }
+      if (m === 'POST' && p === '/api/logout') return send(res, 200, { ok: true }, { 'set-cookie': auth.cookie('', 0) });
+      if (!auth.valid(req)) return send(res, 401, { error: 'login_required' });
+    }
+
     if (m === 'GET' && p === '/api/meta') {
       return send(res, 200, {
         alertTypes: engine.alertTypes,
@@ -127,7 +193,8 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger }) {
         severities: ['critical', 'warning', 'info'],
         // the cloud version (api/) answers mode 'cloud' with all features false
         mode: 'local',
-        features: { sse: true, windowsToast: true, excelFile: true, openFolder: true },
+        auth: !!auth, // signed in with DASHBOARD_PASSWORD (server install): show "sign out"
+        features: { sse: true, windowsToast: !onServer, excelFile: true, openFolder: !onServer },
       });
     }
     if (m === 'GET' && p === '/api/status') return send(res, 200, poller.statusView());

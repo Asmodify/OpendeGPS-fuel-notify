@@ -6,6 +6,7 @@ calibrations.json
 Fuel events.xlsx
 *.xlsx
 .env*
+!.env.example
 testdata/
 evidence/
 *.log

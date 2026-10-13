@@ -167,6 +167,11 @@ export function loadConfig(env = process.env) {
   const excel = env.EXCEL_FILE !== undefined && env.EXCEL_FILE !== '' ? env.EXCEL_FILE : cfg.excelFile;
   cfg.excelFile = typeof excel === 'string' && excel.trim() ? path.resolve(ROOT_DIR, excel.trim()) : null;
   if (cfg.excelFile && !/\.xlsx$/i.test(cfg.excelFile)) cfg.excelFile += '.xlsx';
+  // server install: a password for the dashboard (and a secret that keeps sessions across restarts)
+  cfg.dashboardPassword = String(env.DASHBOARD_PASSWORD || cfg.dashboardPassword || '');
+  cfg.sessionSecret = String(env.SESSION_SECRET || '');
+  cfg.trustProxy = env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true';
+  cfg.cookieSecure = env.COOKIE_SECURE === '1' || env.COOKIE_SECURE === 'true';
   cfg.noBackfill = env.NO_BACKFILL === '1' || env.NO_BACKFILL === 'true';
   cfg.openBrowser = env.OPEN_BROWSER === '1' || env.OPEN_BROWSER === 'true';
   cfg.configPath = configPath;

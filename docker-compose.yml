@@ -1,0 +1,20 @@
+# Server install (Vultr, /opt/fuel-warner):
+#   docker compose up -d --build
+# The dashboard listens on 127.0.0.1:8090 only (reach it through Caddy or an SSH tunnel).
+# Put next to this file (never in git): .env, config.local.json (GPS API key), calibrations.json.
+services:
+  fuel-warner:
+    build: .
+    image: fuel-warner:${TAG:-latest}
+    container_name: fuel-warner
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8090:8080"
+    volumes:
+      - ./data:/data
+      - ./config.local.json:/app/config.local.json:ro
+      - ./calibrations.json:/app/calibrations.json:ro
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
