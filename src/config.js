@@ -20,7 +20,7 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
   sensorMinValidMv: 100,
   lowFuelPct: 10,
   overspeedKmh: 90,
-  idleMinutes: 30,
+  idleMinutes: 0, // 0 = no long-idle alerts (idling is normal for this fleet)
   offlineMinutes: 60,
   powerCutMv: 5000,
   afterHoursEnabled: false,
@@ -50,12 +50,13 @@ const DEFAULTS = {
   gapFetchesPerCycle: 10,
   // history fetched at start-up (from the last stored message, at most this far back): a
   // week, so the Excel fuel ledger starts with a week of refuels and thefts
-  backfillHours: 168,
+  backfillHours: 744,
   // Stored samples replayed into the detectors at start-up so they resume with the same state
   // as before a restart (trusted level, learned consumption, "sensor never worked" judgement,
   // which needs ~90 min of driving to be seen). Should cover at least backfillHours.
   replayHours: 48,
-  keepHours: 168,
+  // raw messages are kept this long (61 days: the dashboard shows up to 60 days of history)
+  keepHours: 1464,
   keepDays: 90,
   apiConcurrency: 4,
   apiTimeoutSeconds: 90,
@@ -67,6 +68,10 @@ const DEFAULTS = {
   // Excel fuel ledger (every refuel and suspected theft), rewritten automatically; relative to
   // this folder; "" = don't write a file (the dashboard download still works)
   excelFile: 'Fuel events.xlsx',
+  // names for the places trucks refuel at, shown in the Alerts Excel (refuelplaces.js):
+  // [{ "name": "...", "lat": 43.6476, "lng": 105.5637, "radiusM": 400 }]. Company sites are
+  // private: put them in config.local.json, not here.
+  refuelPlaces: [],
   timezone: 'Asia/Ulaanbaatar',
   fuelParam: 'io9',
   ignitionParam: 'io239',
@@ -148,14 +153,15 @@ export function loadConfig(env = process.env) {
   delete cfg.pollEventsSeconds;
   if (cfg.messagesMode !== 'gaps') cfg.messagesMode = 'full';
   cfg.gapFetchesPerCycle = Math.round(posNum(cfg.gapFetchesPerCycle, 10, 1));
-  cfg.backfillHours = posNum(cfg.backfillHours, 168, 0);
+  cfg.backfillHours = posNum(cfg.backfillHours, 744, 0);
   cfg.replayHours = posNum(cfg.replayHours, 48, 0);
-  cfg.keepHours = posNum(cfg.keepHours, 168, 1);
+  cfg.keepHours = posNum(cfg.keepHours, 1464, 1);
   cfg.keepDays = posNum(cfg.keepDays, 90, 1);
   cfg.apiConcurrency = Math.round(posNum(cfg.apiConcurrency, 4, 1));
   cfg.apiTimeoutSeconds = posNum(cfg.apiTimeoutSeconds, 90, 5);
   cfg.parkedReportMinutes = posNum(cfg.parkedReportMinutes, 65, 0);
   if (!Array.isArray(cfg.notify.severities)) cfg.notify.severities = ['critical', 'warning'];
+  if (!Array.isArray(cfg.refuelPlaces)) cfg.refuelPlaces = [];
 
   cfg.dataDir = path.resolve(env.DATA_DIR || path.join(ROOT_DIR, 'data'));
   const excel = env.EXCEL_FILE !== undefined && env.EXCEL_FILE !== '' ? env.EXCEL_FILE : cfg.excelFile;

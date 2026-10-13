@@ -9,6 +9,9 @@ import crypto from 'node:crypto';
 import { HttpError } from '../engine.js';
 import { buildXlsx } from '../xlsx.js';
 import { buildLedgerSheets, ledgerXlsxOpts } from '../ledger.js';
+import { fleetStatusXlsxOpts } from '../fleetstatus.js';
+import { ALERTS_EXPORT_MAX, alertFilterFromQuery, alertsXlsxName, alertsXlsxOpts, buildAlertSheets } from '../alertsxlsx.js';
+import { fillWindow, refuelFillSpots } from '../refuelplaces.js';
 import { shortName, num, clamp, errText } from '../util.js';
 import { getSql, js } from './pg.js';
 import { MemDb } from './memdb.js';
@@ -159,7 +162,7 @@ async function loadBase(sql) {
   if (!ps) throw new HttpError(503, 'the database is not set up (run supabase/migrations/0001_fuel.sql)');
   if (!base || base.ver !== ps.ver) {
     const [vehicles, settings] = await Promise.all([
-      sql.unsafe(`select ${VEHICLE_SELECT}, det_state, rec->'lastLevel' as last_level from fuel.vehicles`),
+      sql.unsafe(`select ${VEHICLE_SELECT}, det_state, rec->'lastLevel' as last_level, rec->'gps' as gps from fuel.vehicles`),
       sql`select k, v from fuel.settings where k not like 'learned:%'`,
     ]);
     base = { ver: ps.ver, vehicles: plain(vehicles), settings: settingsObject(settings) };
@@ -178,6 +181,10 @@ async function engineFor(sql, b, extra = {}) {
   }
   const db = new MemDb({ vehicles: b.vehicles, settings: b.settings, lastLevel, ...extra });
   const engine = await new CloudEngine({ cfg, db, detStates }).init();
+  for (const r of b.vehicles) {
+    const rec = r.gps ? engine.recs.get(r.imei) : null;
+    if (rec) rec.gps = r.gps; // GPS fix of the newest point, kept by the tick in fuel.vehicles.rec
+  }
   return { engine, db, cfg };
 }
 
@@ -365,12 +372,23 @@ async function exportXlsx(sql, b) {
   }));
   const first = b.state?.firstTickAt;
   const periodStart = Number.isFinite(first) ? first - cfg.initialBackfillHours * HOUR : null;
+  engine.dataFrom = periodStart;
+  const receipts = engine.receiptResults(now, rows);
   const sheets = buildLedgerSheets({
-    alerts, vehicles, calibrations, tzOffsetMinutes: cfg.tzOffsetMinutes, generatedAt: now, periodStart, timezone: cfg.timezone,
+    alerts, vehicles, calibrations, tzOffsetMinutes: cfg.tzOffsetMinutes, generatedAt: now, periodStart, timezone: cfg.timezone, receipts,
   });
   const buf = buildXlsx(sheets, ledgerXlsxOpts(cfg.tzOffsetMinutes));
   const day = new Date(now + cfg.tzOffsetMinutes * 60e3).toISOString().slice(0, 10);
-  return { buf, name: `Fuel events ${day}.xlsx` };
+  return { buf, name: `Түлшний бүртгэл ${day}.xlsx` };
+}
+
+// ---- fuel receipts (receipts.js; shown and exported, no alerts in the cloud) ---------------
+async function receiptsEngine(sql, b) {
+  const rows = plain(await sql`select * from fuel.alerts where type = 'refuel'`);
+  const { engine, db, cfg } = await engineFor(sql, b, { ledgerAlerts: rows });
+  const first = b.state?.firstTickAt;
+  engine.dataFrom = Number.isFinite(first) ? first - cfg.initialBackfillHours * HOUR : null;
+  return { engine, db };
 }
 
 // ---- routes ---------------------------------------------------------------------------------
@@ -381,11 +399,11 @@ async function login(sql, req, res) {
   sessionSecret();
   const ip = clientIp(req).slice(0, 64);
   const [{ n }] = await sql`select count(*) as n from fuel.login_attempts where ip = ${ip} and at > now() - make_interval(mins => ${LOGIN_WINDOW_MIN})`;
-  if (n >= LOGIN_MAX_FAILS) throw new HttpError(429, `too many failed logins - try again in ${LOGIN_WINDOW_MIN} minutes`);
+  if (n >= LOGIN_MAX_FAILS) throw new HttpError(429, `Хэт олон удаа буруу нэвтэрсэн — ${LOGIN_WINDOW_MIN} минутын дараа дахин оролдоно уу`);
   const b = await body(req, 4096);
   if (!sameSecret(typeof b.password === 'string' ? b.password : '', pw)) {
     await sql`insert into fuel.login_attempts (ip) values (${ip})`;
-    throw new HttpError(401, 'wrong password');
+    throw new HttpError(401, 'Нууц үг буруу байна');
   }
   await sql`delete from fuel.login_attempts where ip = ${ip}`;
   return send(res, 200, { ok: true }, { 'set-cookie': sessionCookie(makeSession(), SESSION_DAYS * 86400) });
@@ -449,7 +467,7 @@ async function api(req, res, url) {
     }
     if (m === 'GET' && seg[2] === 'history' && seg.length === 3) {
       if (!b.vehicles.some((v) => v.imei === imei)) throw new HttpError(404, 'unknown vehicle');
-      const h = clamp(num(intParam(q.get('hours'))) ?? 24, 1, 168);
+      const h = clamp(num(intParam(q.get('hours'))) ?? 24, 1, 744);
       const to = Date.now() + 60e3;
       const from = Date.now() - h * HOUR - 60e3;
       const [samples, levels, alerts] = await Promise.all([
@@ -473,17 +491,50 @@ async function api(req, res, url) {
   if (m === 'GET' && p === '/api/alerts') {
     const limit = Math.min(5000, Math.max(1, Math.round(intParam(q.get('limit')) ?? 200)));
     const rows = await queryAlertRows(sql, {
-      imei: q.get('imei') || undefined,
-      severities: listParam(q.get('severity')),
-      types: listParam(q.get('type')),
-      since: intParam(q.get('since')),
-      until: intParam(q.get('until')),
-      unacked: ['1', 'true', 'yes'].includes(String(q.get('unacked') || '').toLowerCase()),
+      ...alertFilterFromQuery(q, { intParam, listParam }),
       beforeId: intParam(q.get('beforeId')),
       limit,
     });
     const { engine } = await engineFor(sql, b);
     return send(res, 200, rows.map((r) => engine.alertView(r)));
+  }
+  // every alert matching the Alerts view's filter (same query parameters), as Excel
+  if ((m === 'GET' || m === 'HEAD') && p === '/api/export/alerts.xlsx') {
+    const now = Date.now();
+    const filter = alertFilterFromQuery(q, { intParam, listParam });
+    const rows = await queryAlertRows(sql, { ...filter, limit: ALERTS_EXPORT_MAX + 1 });
+    const limited = rows.length > ALERTS_EXPORT_MAX;
+    if (limited) rows.length = ALERTS_EXPORT_MAX;
+    const { engine, cfg } = await engineFor(sql, b);
+    const rec = filter.imei ? engine.recs.get(filter.imei) : null;
+    const vehicleName = rec ? shortName(rec.v.name) : undefined;
+    const info = { filter, alertTypes: engine.alertTypes, vehicleName, now, tzOffsetMinutes: cfg.tzOffsetMinutes };
+    const alerts = rows.map((r) => engine.alertView(r));
+    // refuel fill spots from the stored track (kept cfg.keepSampleHours here); older refuels
+    // fall back to the alert's own position
+    const keepFrom = now - cfg.keepSampleHours * HOUR;
+    const recent = alerts.filter((a) => a.type === 'refuel' && a.imei && Number.isFinite(a.t) && fillWindow(a)[1] >= keepFrom);
+    const track = new Map();
+    if (recent.length) {
+      const from = Math.round(Math.min(...recent.map((a) => fillWindow(a)[0])));
+      const imeis = [...new Set(recent.map((a) => a.imei))];
+      for (const s of plain(await sql`select imei, t, f, spd, lat, lng from fuel.samples
+        where imei = any(${imeis}::text[]) and t >= ${from}::bigint order by imei, t`)) {
+        if (!track.has(s.imei)) track.set(s.imei, []);
+        track.get(s.imei).push(s);
+      }
+    }
+    const fillSpots = refuelFillSpots(recent, (imei, a, z) => (track.get(imei) || []).filter((s) => s.t >= a && s.t <= z));
+    const sheets = buildAlertSheets({ ...info, alerts, timezone: cfg.timezone, limited, fillSpots, refuelPlaces: cfg.refuelPlaces });
+    const buf = buildXlsx(sheets, alertsXlsxOpts(cfg.tzOffsetMinutes));
+    res.writeHead(200, {
+      'content-type': XLSX_TYPE,
+      'content-length': buf.length,
+      'content-disposition': attachment(alertsXlsxName(info)),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    return res.end(m === 'HEAD' ? undefined : buf);
   }
   if (m === 'POST' && p === '/api/alerts/ack-all') {
     const input = await body(req);
@@ -531,6 +582,37 @@ async function api(req, res, url) {
       'content-type': XLSX_TYPE,
       'content-length': buf.length,
       'content-disposition': attachment(name),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    return res.end(m === 'HEAD' ? undefined : buf);
+  }
+  if (m === 'GET' && p === '/api/receipts') {
+    const { engine } = await receiptsEngine(sql, b);
+    return send(res, 200, engine.receiptsView());
+  }
+  if (m === 'POST' && p === '/api/receipts') {
+    const input = await body(req, 2_100_000);
+    const { engine, db } = await receiptsEngine(sql, b);
+    const r = engine.addReceipts(input);
+    if (r.added) await flush(sql, db);
+    return send(res, 200, r);
+  }
+  if (m === 'DELETE' && seg[0] === 'receipts' && seg[1] && seg.length === 2) {
+    const { engine, db } = await receiptsEngine(sql, b);
+    const r = engine.deleteReceipt(seg[1]);
+    await flush(sql, db);
+    return send(res, 200, r);
+  }
+  if ((m === 'GET' || m === 'HEAD') && p === '/api/export/fleet-status.xlsx') {
+    const now = Date.now();
+    const { engine, cfg } = await engineFor(sql, b);
+    const buf = buildXlsx(engine.fleetStatusSheets(now), fleetStatusXlsxOpts(cfg.tzOffsetMinutes));
+    const day = new Date(now + cfg.tzOffsetMinutes * 60e3).toISOString().slice(0, 10);
+    res.writeHead(200, {
+      'content-type': XLSX_TYPE,
+      'content-length': buf.length,
+      'content-disposition': attachment(`Машинуудын төлөв ${day}.xlsx`),
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff',
     });

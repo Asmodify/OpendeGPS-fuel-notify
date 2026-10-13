@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { log, errText, num, clamp, round, shortName, tzOffsetMinutes } from './util.js';
+import { mnDetail } from './mn.js';
 
 const MIN = 60e3;
 const HOUR = 3600e3;
@@ -26,17 +27,31 @@ const RETRY_MS = 60e3;
 const SAFETY_MS = HOUR;
 const START_CHECK_MS = 3 * MIN; // see start()
 
-export const LOCKED_MESSAGE = 'Excel file is open — it will be updated when you close it';
+export const LOCKED_MESSAGE = 'Excel файл нээлттэй байна — хаасны дараа шинэчлэгдэнэ';
 // write errors that waiting does not fix (xlsx.js codes, and fs errors creating the file)
 const BLOCKED_CODES = new Set(['READONLY', 'NOACCESS', 'EACCES', 'EPERM', 'EROFS']);
 
-const VERDICT_LABEL = { unchecked: 'Unchecked', confirmed: 'Confirmed theft', false_alarm: 'False alarm' };
-const CANCELLED = 'Cancelled — level came back';
+const VERDICT_LABEL = { unchecked: 'Шалгаагүй', confirmed: 'Хулгай батлагдсан', false_alarm: 'Худал дохио' };
+const CANCELLED = 'Цуцлагдсан — түвшин буцаж сэргэсэн';
 const DT = 'yyyy-mm-dd hh:mm';
 const L1 = '#,##0.0';
 const L0 = '#,##0';
 
-const PENDING = 'Checking — waiting 5 h';
+const PENDING = 'Шалгаж байна — 5 цаг хүлээж байна';
+// situationOf() works on the English alert text; this is what the file shows
+const SITUATION_MN = {
+  'During trip': 'Аяллын үеэр',
+  'At a stop, master switch off': 'Зогсолтын үед, масс таслуур унтраастай',
+  'At a short stop': 'Богино зогсолтын үед',
+  'At a stop (seen driving off)': 'Зогсолтын үед (хөдлөхөд илэрсэн)',
+  'Parked, master switch off': 'Зогсоолд, масс таслуур унтраастай',
+  'Parked, just before driving off': 'Зогсоолд, хөдлөхийн өмнөхөн',
+  'Parked': 'Зогсоолд',
+  'Master switch off': 'Масс таслуур унтраастай',
+  'Between stops (seen after the trip)': 'Зогсоол хооронд (аяллын дараа илэрсэн)',
+  'While driving (first reading)': 'Явж байхад (эхний заалт)',
+};
+const situationMn = (row) => { const s = situationOf(row); return SITUATION_MN[s] ?? s; };
 
 export function parseExtra(json) {
   if (!json) return {};
@@ -86,6 +101,18 @@ export function fuelPct(mv, cal) {
 }
 
 /** Litres in the tank for a sensor reading (table interpolation when available). */
+const SENSOR_MAX_MV = 10000; // the fuel probes are 0-10 V; higher readings are wiring faults
+
+/** Litres above a tank table's top point. Full tanks read 9000-9300 mV on tables that stop at
+ *  8920 / 8630 mV (the calibration was not filled to the brim), so clamping there under-counted
+ *  every fill-up; the last segment is extended instead, up to the sensor's 10 V. */
+export function aboveTableTop(mv, tb) {
+  const [x0, y0] = tb[tb.length - 2];
+  const [x1, y1] = tb[tb.length - 1];
+  const m = Math.min(mv, Math.max(x1, SENSOR_MAX_MV));
+  return x1 === x0 ? y1 : y1 + ((m - x1) * (y1 - y0)) / (x1 - x0);
+}
+
 export function litersAt(mv, cal) {
   const tb = cal.table;
   if (Array.isArray(tb) && tb.length >= 2) {
@@ -97,7 +124,7 @@ export function litersAt(mv, cal) {
         return y0 + ((mv - x0) / (x1 - x0)) * (y1 - y0);
       }
     }
-    return tb[tb.length - 1][1];
+    return aboveTableTop(mv, tb);
   }
   const pct = fuelPct(mv, cal);
   return pct !== null && cal.tankLiters ? (pct / 100) * cal.tankLiters : null;
@@ -155,7 +182,7 @@ export function situationOf(row) {
 }
 
 const validPos = (lat, lng) => Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
-const mapLink = (lat, lng) => (validPos(lat, lng) ? { text: 'Open map', url: `https://maps.google.com/?q=${lat.toFixed(6)},${lng.toFixed(6)}` } : null);
+const mapLink = (lat, lng) => (validPos(lat, lng) ? { text: 'Газрын зураг', url: `https://maps.google.com/?q=${lat.toFixed(6)},${lng.toFixed(6)}` } : null);
 
 export class Ledger {
   constructor({ cfg, engine, db }) {
@@ -446,16 +473,22 @@ export class Ledger {
     } catch {
       /* keep the events' own range */
     }
+    let receipts = [];
+    try {
+      receipts = e.receiptResults?.(now) ?? [];
+    } catch (err) {
+      log('error', 'Checking fuel receipts for the Excel ledger failed:', err);
+    }
     return buildLedger({
       alerts, vehicles, calibrations, tzOffsetMinutes: tzOffsetMinutes(this.cfg.timezone, now), generatedAt: now,
-      periodStart, timezone: this.cfg.timezone || 'local',
+      periodStart, timezone: this.cfg.timezone || 'local', receipts,
     });
   }
 }
 
 /** Options for xlsx.js buildXlsx(sheets, opts) that go with the ledger sheets. */
 export function ledgerXlsxOpts(tzOffsetMin = 480) {
-  return { tzOffsetMinutes: tzOffsetMin, creator: 'Fuel Tank Warner', title: 'Fuel ledger — refuels and suspected fuel thefts' };
+  return { tzOffsetMinutes: tzOffsetMin, creator: 'Fuel Tank Warner', title: 'Fuel ledger — refuels and suspected fuel thefts', protect: true };
 }
 
 /** An alert as /api/alerts returns it (camelCase; extra fields in `extra` (object or JSON) or at
@@ -465,7 +498,7 @@ function ledgerRow(a) {
   for (const k of ['fromMv', 'toMv', 'dipMv', 'recoveredMv']) if (extra[k] === undefined && a[k] !== undefined) extra[k] = a[k];
   return {
     id: num(a.id) ?? 0, imei: a.imei ?? null, name: a.name ?? null, shortName: a.shortName ?? null, group: a.group ?? null,
-    type: a.type, severity: a.severity, t: num(a.t), from_t: num(a.fromT ?? a.from_t), title: a.title ?? '', detail: a.detail ?? '',
+    type: a.type, severity: a.severity, t: num(a.t), from_t: num(a.fromT ?? a.from_t), title: a.titleEn ?? a.title ?? '', detail: a.detailEn ?? a.detail ?? '',
     amount_mv: num(a.amountMv ?? a.amount_mv), lat: num(a.lat), lng: num(a.lng), ongoing: !!a.ongoing,
     verdict: a.verdict ?? null, note: a.note || null, extra,
   };
@@ -483,7 +516,7 @@ const zoneLabel = (m) => `UTC${m < 0 ? '-' : '+'}${String(Math.floor(Math.abs(m)
  *   periodStart:  optional ms: start of the period covered (else the oldest event)
  * Returns { sheets, sig (content hash without the generated time), counts, periodStart }.
  */
-export function buildLedger({ alerts = [], vehicles = [], calibrations = {}, tzOffsetMinutes: tzMin = 480, generatedAt, periodStart: since = null, timezone } = {}) {
+export function buildLedger({ alerts = [], vehicles = [], calibrations = {}, tzOffsetMinutes: tzMin = 480, generatedAt, periodStart: since = null, timezone, receipts = [] } = {}) {
   const now = num(generatedAt) ?? Date.now();
   const vmap = new Map();
   for (const v of vehicles || []) if (v && v.imei !== undefined && v.imei !== null) vmap.set(String(v.imei), v);
@@ -538,8 +571,8 @@ export function buildLedger({ alerts = [], vehicles = [], calibrations = {}, tzO
       d.refuels++;
       if (L !== null) d.refuelL += L;
       refuels.push([
-        start, row.t, name, group, L, litres(fromMv), litres(toMv), situationOf(row), mapLink(row.lat, row.lng),
-        row.note || null, row.ongoing ? 'Ongoing' : 'Complete', mv === null ? null : Math.round(mv), imei, row.detail || '', row.id,
+        start, row.t, name, group, L, litres(fromMv), litres(toMv), situationMn(row), mapLink(row.lat, row.lng),
+        row.note || null, row.ongoing ? 'Үргэлжилж байна' : 'Дууссан', mv === null ? null : Math.round(mv), imei, mnDetail(row.detail) || '', row.id,
       ]);
       continue;
     }
@@ -568,10 +601,10 @@ export function buildLedger({ alerts = [], vehicles = [], calibrations = {}, tzO
       if (L !== null) d.lostL += L;
     }
     thefts.push([
-      start, row.t, name, group, cancelled && verdict !== 'confirmed' ? null : L, litres(fromMv), litres(toMv), situationOf(row),
+      start, row.t, name, group, cancelled && verdict !== 'confirmed' ? null : L, litres(fromMv), litres(toMv), situationMn(row),
       row.from_t !== null && row.from_t !== undefined ? Math.max(0, Math.round((row.t - row.from_t) / MIN)) : null,
-      mapLink(row.lat, row.lng), VERDICT_LABEL[verdict] || 'Unchecked', row.note || null,
-      pending ? PENDING : cancelled ? CANCELLED : row.ongoing ? 'Ongoing' : 'Closed', mv === null ? null : Math.round(mv), imei, row.detail || '', row.id,
+      mapLink(row.lat, row.lng), VERDICT_LABEL[verdict] || VERDICT_LABEL.unchecked, row.note || null,
+      pending ? PENDING : cancelled ? CANCELLED : row.ongoing ? 'Үргэлжилж байна' : 'Хаагдсан', mv === null ? null : Math.round(mv), imei, mnDetail(row.detail) || '', row.id,
     ]);
   }
   thefts.sort((a, b) => b[0] - a[0] || b[16] - a[16]);
@@ -585,7 +618,7 @@ export function buildLedger({ alerts = [], vehicles = [], calibrations = {}, tzO
     const veh = vmap.get(imei);
     const cal = imei ? calOf(imei) : null;
     const hasLitres = !!cal?.tankLiters;
-    const name = veh ? shortName(veh.name ?? veh.shortName ?? imei) : shortName(rows.find((r) => (r.imei ?? '') === imei)?.name) || imei || 'Unknown vehicle';
+    const name = veh ? shortName(veh.name ?? veh.shortName ?? imei) : shortName(rows.find((r) => (r.imei ?? '') === imei)?.name) || imei || 'Тодорхойгүй машин';
     total.refuels += v.refuels;
     total.thefts += v.thefts;
     total.confirmed += v.confirmed;
@@ -624,133 +657,180 @@ export function buildLedger({ alerts = [], vehicles = [], calibrations = {}, tzO
   // button), except the long free-text columns, which wrap instead.
   const sheets = [
     {
-      name: 'Thefts',
+      name: 'Хулгай',
       freezeHeader: true,
       autoFilter: true,
       columns: [
-        { header: 'Start time', type: 'datetime', numFmt: DT },
-        { header: 'Detected at', type: 'datetime', numFmt: DT },
-        { header: 'Vehicle', type: 'string' },
-        { header: 'Group', type: 'string' },
-        { header: 'Litres lost', type: 'number', numFmt: L1 },
-        { header: 'Level before (L)', type: 'number', numFmt: L0 },
-        { header: 'Level after (L)', type: 'number', numFmt: L0 },
-        { header: 'Situation', type: 'string' },
-        { header: 'Duration (min)', type: 'number', numFmt: L0 },
-        { header: 'Map', type: 'link' },
-        { header: 'Verdict', type: 'string' },
-        { header: 'Note', type: 'string', width: 36, wrap: true },
-        { header: 'Status', type: 'string' },
-        { header: 'mV', type: 'number', numFmt: L0 },
+        { header: 'Эхэлсэн цаг', type: 'datetime', numFmt: DT },
+        { header: 'Илэрсэн цаг', type: 'datetime', numFmt: DT },
+        { header: 'Машин', type: 'string' },
+        { header: 'Бүлэг', type: 'string' },
+        { header: 'Алдагдсан литр', type: 'number', numFmt: L1 },
+        { header: 'Өмнөх түвшин (л)', type: 'number', numFmt: L0 },
+        { header: 'Дараах түвшин (л)', type: 'number', numFmt: L0 },
+        { header: 'Нөхцөл байдал', type: 'string' },
+        { header: 'Үргэлжилсэн (мин)', type: 'number', numFmt: L0 },
+        { header: 'Газрын зураг', type: 'link' },
+        { header: 'Дүгнэлт', type: 'string' },
+        { header: 'Тэмдэглэл', type: 'string', width: 36, wrap: true },
+        { header: 'Төлөв', type: 'string' },
+        { header: 'мВ', type: 'number', numFmt: L0 },
         { header: 'IMEI', type: 'string' },
-        { header: 'Details', type: 'string', width: 60, wrap: true },
-        { header: 'Alert ID', type: 'number', numFmt: '0' },
+        { header: 'Дэлгэрэнгүй', type: 'string', width: 60, wrap: true },
+        { header: 'Анхааруулгын №', type: 'number', numFmt: '0' },
       ],
       rows: thefts,
     },
     {
-      name: 'Refuels',
+      name: 'Цэнэглэлт',
       freezeHeader: true,
       autoFilter: true,
       columns: [
-        { header: 'Start time', type: 'datetime', numFmt: DT },
-        { header: 'Detected at', type: 'datetime', numFmt: DT },
-        { header: 'Vehicle', type: 'string' },
-        { header: 'Group', type: 'string' },
-        { header: 'Litres added', type: 'number', numFmt: L1 },
-        { header: 'Level before (L)', type: 'number', numFmt: L0 },
-        { header: 'Level after (L)', type: 'number', numFmt: L0 },
-        { header: 'Situation', type: 'string' },
-        { header: 'Map', type: 'link' },
-        { header: 'Note', type: 'string', width: 36, wrap: true },
-        { header: 'Status', type: 'string' },
-        { header: 'mV', type: 'number', numFmt: L0 },
+        { header: 'Эхэлсэн цаг', type: 'datetime', numFmt: DT },
+        { header: 'Илэрсэн цаг', type: 'datetime', numFmt: DT },
+        { header: 'Машин', type: 'string' },
+        { header: 'Бүлэг', type: 'string' },
+        { header: 'Нэмэгдсэн литр', type: 'number', numFmt: L1 },
+        { header: 'Өмнөх түвшин (л)', type: 'number', numFmt: L0 },
+        { header: 'Дараах түвшин (л)', type: 'number', numFmt: L0 },
+        { header: 'Нөхцөл байдал', type: 'string' },
+        { header: 'Газрын зураг', type: 'link' },
+        { header: 'Тэмдэглэл', type: 'string', width: 36, wrap: true },
+        { header: 'Төлөв', type: 'string' },
+        { header: 'мВ', type: 'number', numFmt: L0 },
         { header: 'IMEI', type: 'string' },
-        { header: 'Details', type: 'string', width: 60, wrap: true },
-        { header: 'Alert ID', type: 'number', numFmt: '0' },
+        { header: 'Дэлгэрэнгүй', type: 'string', width: 60, wrap: true },
+        { header: 'Анхааруулгын №', type: 'number', numFmt: '0' },
       ],
       rows: refuels,
     },
     {
-      name: 'By vehicle',
+      name: 'Машинаар',
       freezeHeader: true,
       autoFilter: true,
       fitToWidth: true,
       columns: [
-        { header: 'Vehicle', type: 'string' },
-        { header: 'Group', type: 'string' },
-        { header: 'Tank size (L)', type: 'number', numFmt: L0 },
-        { header: 'Refuels', type: 'number', numFmt: L0 },
-        { header: 'Litres refuelled', type: 'number', numFmt: L1 },
-        { header: 'Suspected thefts', type: 'number', numFmt: L0 },
-        { header: 'Litres lost', type: 'number', numFmt: L1 },
-        { header: 'Confirmed thefts', type: 'number', numFmt: L0 },
-        { header: 'Last theft', type: 'datetime', numFmt: DT },
-        { header: 'Refuelled (mV)', type: 'number', numFmt: L0 },
-        { header: 'Lost (mV)', type: 'number', numFmt: L0 },
+        { header: 'Машин', type: 'string' },
+        { header: 'Бүлэг', type: 'string' },
+        { header: 'Савны хэмжээ (л)', type: 'number', numFmt: L0 },
+        { header: 'Цэнэглэлт', type: 'number', numFmt: L0 },
+        { header: 'Цэнэглэсэн литр', type: 'number', numFmt: L1 },
+        { header: 'Хулгайн сэжиг', type: 'number', numFmt: L0 },
+        { header: 'Алдагдсан литр', type: 'number', numFmt: L1 },
+        { header: 'Батлагдсан хулгай', type: 'number', numFmt: L0 },
+        { header: 'Сүүлийн хулгай', type: 'datetime', numFmt: DT },
+        { header: 'Цэнэглэсэн (мВ)', type: 'number', numFmt: L0 },
+        { header: 'Алдагдсан (мВ)', type: 'number', numFmt: L0 },
       ],
       rows: vrows,
-      totalRow: ['TOTAL', null, null, total.refuels, round(total.refuelL, 1), total.thefts, round(total.lostL, 1), total.confirmed, total.lastTheft, null, null],
+      totalRow: ['НИЙТ', null, null, total.refuels, round(total.refuelL, 1), total.thefts, round(total.lostL, 1), total.confirmed, total.lastTheft, null, null],
     },
     {
-      name: 'By day',
+      name: 'Өдрөөр',
       freezeHeader: true,
       autoFilter: true,
       fitToWidth: true,
       columns: [
-        { header: 'Date', type: 'date', numFmt: 'yyyy-mm-dd' },
-        { header: 'Refuels', type: 'number', numFmt: L0 },
-        { header: 'Litres refuelled', type: 'number', numFmt: L1 },
-        { header: 'Suspected thefts', type: 'number', numFmt: L0 },
-        { header: 'Litres lost', type: 'number', numFmt: L1 },
+        { header: 'Огноо', type: 'date', numFmt: 'yyyy-mm-dd' },
+        { header: 'Цэнэглэлт', type: 'number', numFmt: L0 },
+        { header: 'Цэнэглэсэн литр', type: 'number', numFmt: L1 },
+        { header: 'Хулгайн сэжиг', type: 'number', numFmt: L0 },
+        { header: 'Алдагдсан литр', type: 'number', numFmt: L1 },
       ],
       rows: drows,
-      totalRow: ['TOTAL', dayTot.refuels, round(dayTot.refuelL, 1), dayTot.thefts, round(dayTot.lostL, 1)],
+      totalRow: ['НИЙТ', dayTot.refuels, round(dayTot.refuelL, 1), dayTot.thefts, round(dayTot.lostL, 1)],
     },
   ];
+  // fuel receipts checked against the refuels (receipts.js matchReceipts results)
+  if (receipts && receipts.length) {
+    const RSTATUS = {
+      short: 'Түлш дутуу', norefuel: 'Цэнэглэлт бүртгэгдээгүй', ok: 'Таарсан', waiting: 'Мэдээлэл хүлээж байна', nodata: 'Тэр үед мэдээлэлгүй', nosensor: 'Түлшний мэдрэгчгүй',
+    };
+    const rt = { litres: 0, wentIn: 0, missing: 0 };
+    const rrows = receipts.map((r) => {
+      const f = r.refuel;
+      const missing = r.status === 'short' ? r.missing : r.status === 'norefuel' ? r.litres : null;
+      rt.litres += r.litres;
+      if (f) rt.wentIn += f.wentIn;
+      if (missing !== null) rt.missing += missing;
+      return [
+        r.date, r.time ?? (r.dateTo ? `…${r.dateTo}` : ''), r.vehicle, vmap.get(r.imei)?.group ?? '', r.litres,
+        f ? f.wentIn : null, missing, RSTATUS[r.status] ?? r.status,
+        f ? f.fromT : null, f ? f.before : null, f ? f.after : null, r.room, r.nofit ? 'Тийм' : '',
+        f ? mapLink(f.lat, f.lng) : null,
+      ];
+    });
+    sheets.push({
+      name: 'Баримт',
+      freezeHeader: true,
+      autoFilter: true,
+      columns: [
+        { header: 'Огноо', type: 'date', numFmt: 'yyyy-mm-dd' },
+        { header: 'Цаг', type: 'string' },
+        { header: 'Машин', type: 'string' },
+        { header: 'Бүлэг', type: 'string' },
+        { header: 'Баримт (л)', type: 'number', numFmt: L1 },
+        { header: 'Савд орсон (л)', type: 'number', numFmt: L1 },
+        { header: 'Дутуу (л)', type: 'number', numFmt: L1 },
+        { header: 'Үр дүн', type: 'string' },
+        { header: 'Цэнэглэсэн цаг', type: 'datetime', numFmt: DT },
+        { header: 'Өмнөх түвшин (л)', type: 'number', numFmt: L0 },
+        { header: 'Дараах түвшин (л)', type: 'number', numFmt: L0 },
+        { header: 'Савны сул зай (л)', type: 'number', numFmt: L0 },
+        { header: 'Баримт савд багтахгүй', type: 'string' },
+        { header: 'Газрын зураг', type: 'link' },
+      ],
+      rows: rrows,
+      totalRow: ['НИЙТ', null, null, null, round(rt.litres, 1), round(rt.wentIn, 1), round(rt.missing, 1), null, null, null, null, null, null, null],
+    });
+  }
   const sig = crypto.createHash('sha1').update(JSON.stringify(sheets)).digest('hex');
-  const withL = (n, l) => `${n}${l ? ` (${fmtL(l)} L where the tank size is known)` : ''}`;
+  const withL = (n, l) => `${n}${l ? ` (савны хэмжээ мэдэгдэх машинуудад ${fmtL(l)} л)` : ''}`;
   const zone = timezone || zoneLabel(tzMin);
   const notCounted = [
-    counts.cancelled ? `${counts.cancelled} cancelled (level came back)` : '',
-    counts.falseAlarms ? `${counts.falseAlarms} marked as false alarm` : '',
+    counts.cancelled ? `${counts.cancelled} цуцлагдсан (түвшин буцаж сэргэсэн)` : '',
+    counts.falseAlarms ? `${counts.falseAlarms} худал дохио гэж тэмдэглэсэн` : '',
   ].filter(Boolean);
   const p = (text, more = {}) => ({ text, wrap: true, ...more }); // a paragraph, wrapped in column A
   sheets.push({
-    name: 'About',
+    name: 'Тайлбар',
     width: 100,
     orientation: 'portrait',
     fitToWidth: true,
     titleLines: [
-      'Fuel ledger — every refuel and suspected fuel theft',
-      `Generated: ${local(now)} (${zone} time)`,
-      p(periodStart !== null ? `Period covered: ${local(periodStart)} – ${local(now)} (from the oldest data this program has stored)` : 'Period covered: no data yet'),
-      p(`Refuels: ${withL(counts.refuels, total.refuelL)}. Suspected thefts: ${withL(counts.thefts, total.lostL)}` +
-        `${notCounted.length ? ` (not counting ${notCounted.join(' and ')})` : ''}. Confirmed thefts: ${counts.confirmed}.`),
+      'Түлшний бүртгэл — бүх цэнэглэлт ба түлшний хулгайн сэжиг',
+      `Бэлтгэсэн: ${local(now)} (${zone} цаг)`,
+      p(periodStart !== null ? `Хамрах хугацаа: ${local(periodStart)} – ${local(now)} (программын хадгалсан хамгийн эртний мэдээллээс)` : 'Хамрах хугацаа: мэдээлэл хараахан алга'),
+      p(`Цэнэглэлт: ${withL(counts.refuels, total.refuelL)}. Хулгайн сэжиг: ${withL(counts.thefts, total.lostL)}` +
+        `${notCounted.length ? ` (тооцоогүй: ${notCounted.join('; ')})` : ''}. Батлагдсан хулгай: ${counts.confirmed}.`),
       '',
-      p('This file is rewritten automatically by Fuel Tank Warner. Add notes and verdicts in the dashboard — they are saved here. ' +
-        'If you want to edit the file yourself, save a copy under another name.', { bold: true }),
+      p('Энэ файлыг Fuel Tank Warner автоматаар дахин бичдэг. Тэмдэглэл, дүгнэлтийг самбар дээр оруулна уу — энд хадгалагдана. ' +
+        'Бүртгэгдсэн цэнэглэлт, хулгайг өөрчлөх боломжгүйн тулд хуудсууд түгжээтэй (зөвхөн унших); эрэмбэлэх, шүүх боломжтой.', { bold: true }),
       '',
-      { text: 'SHEETS', bold: true },
-      p('Thefts — every suspected fuel theft or leak (a "Fuel drain" alert), newest first.'),
-      p('  Start time: the last normal reading before the fuel went missing. Detected at: when the program was sure.'),
-      p('  Litres lost: how much fuel disappeared. For losses on a trip ("During trip") it is the part that normal driving does not explain, so it can be less than Level before minus Level after.'),
-      p('  Level before / Level after: litres in the tank before and after (for a cancelled drain: the level it came back to). Situation: parked, master switch off, at a short stop, during a trip, ...'),
-      p('  Duration (min): minutes from the start to the detection. Map: opens the place in Google Maps.'),
-      p('  Verdict: Unchecked, Confirmed theft or False alarm — set with the buttons on the alert in the dashboard. Note: your note from the dashboard.'),
-      p('  Status: Ongoing (the level is still falling), Closed, or Cancelled — level came back (a sensor or tilt effect, not a loss).'),
-      p('  mV: the size of the change in the sensor\'s own unit (millivolts). IMEI: the tracker. Details: the alert text. Alert ID: the number in the program.'),
-      p('Refuels — every refuel, newest first: vehicle, litres added, the level before and after, where it happened, your note.'),
-      p('  Start time: the last reading before the fuel rose. Detected at: when the program saw the new level. The refuel happened between the two ' +
-        '(usually minutes apart; for a refuel first seen after a trip it can be hours, so compare with the fuel station receipt).'),
-      p('By vehicle — per vehicle: tank size, number of refuels and litres refuelled, suspected thefts and litres lost, confirmed thefts, the last theft.'),
-      p('By day — per day (the local date of the Start time): refuels, litres refuelled, suspected thefts, litres lost.'),
+      { text: 'ХУУДСУУД', bold: true },
+      p('Хулгай — түлшний хулгай эсвэл алдагдлын бүх сэжиг (“Түлш алдагдал” анхааруулга), шинэ нь эхэндээ.'),
+      p('  Эхэлсэн цаг: түлш алга болохын өмнөх сүүлийн хэвийн заалт. Илэрсэн цаг: программ итгэлтэй болсон үе.'),
+      p('  Алдагдсан литр: хэр их түлш алга болсон. Аяллын үеийн алдагдалд (“Аяллын үеэр”) хэвийн явалтаар тайлбарлагдахгүй хэсэг тул Өмнөх түвшин хасах Дараах түвшнээс бага байж болно.'),
+      p('  Өмнөх / Дараах түвшин: саван дахь литр өмнө ба дараа (цуцлагдсан алдагдлын хувьд: буцаж сэргэсэн түвшин). Нөхцөл байдал: зогсоолд, масс таслуур унтраастай, богино зогсолтын үед, аяллын үеэр, ...'),
+      p('  Үргэлжилсэн (мин): эхлэлээс илрэх хүртэлх минут. Газрын зураг: газрыг Google Maps-д нээнэ.'),
+      p('  Дүгнэлт: Шалгаагүй, Хулгай батлагдсан эсвэл Худал дохио — самбар дээрх анхааруулгын товчоор тогтооно. Тэмдэглэл: самбараас оруулсан таны тэмдэглэл.'),
+      p('  Төлөв: Үргэлжилж байна (түвшин буурсаар байна), Хаагдсан, эсвэл Цуцлагдсан — түвшин буцаж сэргэсэн (алдагдал биш, мэдрэгч эсвэл налуугийн нөлөө).'),
+      p('  мВ: өөрчлөлтийн хэмжээ мэдрэгчийн өөрийн нэгжээр (милливольт). IMEI: трекер. Дэлгэрэнгүй: анхааруулгын текст. Анхааруулгын №: программ дахь дугаар.'),
+      p('Цэнэглэлт — бүх цэнэглэлт, шинэ нь эхэндээ: машин, нэмэгдсэн литр, өмнөх ба дараах түвшин, хаана болсон, таны тэмдэглэл.'),
+      p('  Эхэлсэн цаг: түлш нэмэгдэхийн өмнөх сүүлийн заалт. Илэрсэн цаг: программ шинэ түвшинг харсан үе. Цэнэглэлт энэ хоёрын хооронд болсон ' +
+        '(ихэвчлэн хэдхэн минут; аяллын дараа илэрсэн цэнэглэлт хэдэн цаг байж болох тул шатахуун түгээх станцын баримттай харьцуулна уу).'),
+      p('Машинаар — машин тус бүрээр: савны хэмжээ, цэнэглэлтийн тоо ба литр, хулгайн сэжиг ба алдагдсан литр, батлагдсан хулгай, сүүлийн хулгай.'),
+      p('Өдрөөр — өдөр тус бүрээр (Эхэлсэн цагийн орон нутгийн огноо): цэнэглэлт, цэнэглэсэн литр, хулгайн сэжиг, алдагдсан литр.'),
+      ...(receipts && receipts.length ? [
+        p('Баримт — самбарт оруулсан түлшний баримтууд (Тайлан → Түлшний баримт), тус бүрийг тэр өдөр түлшний мэдрэгчийн бүртгэсэн цэнэглэлттэй тулгасан. ' +
+          '“Дутуу” нь баримтаас савд орсныг хассан дүн (цэнэглэлт бүртгэгдээгүй бол баримтын бүх дүн). “Баримт савд багтахгүй”: баримт цэнэглэхийн өмнөх савны сул зайнаас их.'),
+      ] : []),
       '',
-      { text: 'HOW THE NUMBERS ARE MADE', bold: true },
-      p('Litres come from the tank calibration tables on the GPS server (or a tank size entered in Settings). Vehicles without one show only mV; their litres cells are empty and they are not in the litre totals.'),
-      p('Drains marked "False alarm" and cancelled drains (the level came back) are listed but not counted in the totals, suspected thefts or litres lost, ' +
-        'unless you mark a cancelled one as "Confirmed theft": then it counts, with the size of its dip. The dashboard\'s Report counts the same way.'),
-      p('Times are local time (' + zone + '). The fuel level is measured from steady readings while a vehicle stands still, because the reading jumps around while driving.'),
+      { text: 'ТООНУУДЫГ ХЭРХЭН ГАРГАСАН', bold: true },
+      p('Литрийг GPS сервер дээрх савны тохируулгын хүснэгтээс (эсвэл Тохиргоонд оруулсан савны хэмжээнээс) авдаг. Ийм хүснэгтгүй машинд зөвхөн мВ харуулах бөгөөд литрийн нүд хоосон, литрийн нийлбэрт орохгүй.'),
+      p('“Худал дохио” гэж тэмдэглэсэн болон цуцлагдсан алдагдлыг (түвшин буцаж сэргэсэн) жагсаах боловч нийлбэр, хулгайн сэжиг, алдагдсан литрт тооцохгүй, ' +
+        'харин цуцлагдсаныг “Хулгай батлагдсан” гэж тэмдэглэвэл унасан хэмжээгээр нь тооцно. Самбарын Тайлан мөн адил тооцдог.'),
+      p('Цаг нь орон нутгийн цаг (' + zone + '). Явж байхад заалт үсэрдэг тул түлшний түвшинг машин зогсож байх үеийн тогтвортой заалтаар хэмждэг.'),
     ],
   });
   return { sheets, sig, counts, periodStart };
@@ -763,9 +843,9 @@ export function buildLedgerSheets(opts = {}) {
 
 /** What to tell the owner about a write that fails for good. */
 function blockedText(e, file) {
-  if (e.code === 'READONLY') return `${path.basename(file)} is marked read-only, so it cannot be updated — in Explorer, right-click it, choose Properties and untick "Read-only"`;
-  if (e.code === 'NOACCESS') return `No permission to change ${file} — check its permissions, or set another excelFile in config.json`;
-  return `No permission to write ${file} (${e.code}) — check the folder's permissions, or set another excelFile in config.json`;
+  if (e.code === 'READONLY') return `${path.basename(file)} зөвхөн унших тохиргоотой тул шинэчлэх боломжгүй — Explorer дээр баруун товшоод Properties-ийг сонгож "Read-only"-г арилгана уу`;
+  if (e.code === 'NOACCESS') return `${file}-г өөрчлөх эрх алга — эрхийг нь шалгах эсвэл config.json-д өөр excelFile тохируулна уу`;
+  return `${file}-д бичих эрх алга (${e.code}) — хавтасны эрхийг шалгах эсвэл config.json-д өөр excelFile тохируулна уу`;
 }
 
 function fmtL(x) {

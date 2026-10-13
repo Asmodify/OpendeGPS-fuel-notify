@@ -157,8 +157,8 @@ Environment variables (for special setups):
 | `NO_BACKFILL` | – | `1` = do not download history at start (for quick tests) |
 | `EXCEL_FILE` | `Fuel events.xlsx` here | Where the Excel fuel ledger is written |
 
-History is kept for 7 days (`keepHours`), fuel levels and alerts for 90 days (`keepDays`),
-refuels and fuel drains forever (they are the Excel fuel ledger). At start-up up to 7 days of
+History is kept for 61 days (`keepHours`; the dashboard shows up to 60 days), fuel levels and alerts for 90 days (`keepDays`),
+refuels and fuel drains forever (they are the Excel fuel ledger). At start-up up to 31 days of
 missing history is downloaded (`backfillHours`). To start from scratch, stop the program and
 delete the `data` folder.
 

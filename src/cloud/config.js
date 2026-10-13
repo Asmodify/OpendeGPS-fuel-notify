@@ -30,6 +30,15 @@ const posInt = (x, dflt, min, max) => {
   return Number.isFinite(n) && n >= min && n <= max ? n : dflt;
 };
 
+const parseJsonList = (s) => {
+  try {
+    const v = s ? JSON.parse(s) : [];
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+};
+
 /** The cfg object Engine expects (see config.js loadConfig), for the cloud. */
 export function cloudConfig(env = process.env, calibrationRows = []) {
   const calibrations = {};
@@ -63,6 +72,8 @@ export function cloudConfig(env = process.env, calibrationRows = []) {
     // the cloud only notifies in the open dashboard
     notify: { windowsToast: false, severities: ['critical', 'warning'], throttleMinutes: 10 },
     calibrations,
+    // named refuel places (refuelplaces.js), as JSON: [{ "name", "lat", "lng", "radiusM" }]
+    refuelPlaces: parseJsonList(env.REFUEL_PLACES),
     configError: null,
   };
 }

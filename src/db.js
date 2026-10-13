@@ -168,6 +168,18 @@ export class Store {
     for (const [name, type] of ALERT_COLUMNS) {
       if (!have.has(name)) this.db.exec(`ALTER TABLE alerts ADD COLUMN ${name} ${type}`);
     }
+    // Recorded data is read-only: tracker messages can never be changed, and only messages
+    // older than 30 days may be removed (the 31-day clean-up); refuels and fuel drops (the
+    // fuel ledger) can never be deleted. Anything else aborts with an error.
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS samples_read_only BEFORE UPDATE ON samples
+        BEGIN SELECT RAISE(ABORT, 'tracker data is read-only'); END;
+      CREATE TRIGGER IF NOT EXISTS samples_keep_month BEFORE DELETE ON samples
+        WHEN OLD.t > unixepoch() * 1000 - 30 * 86400000
+        BEGIN SELECT RAISE(ABORT, 'tracker data of the last 30 days cannot be deleted'); END;
+      CREATE TRIGGER IF NOT EXISTS fuel_ledger_keep BEFORE DELETE ON alerts
+        WHEN OLD.type IN (${LEDGER_TYPES.map((x) => `'${x}'`).join(', ')})
+        BEGIN SELECT RAISE(ABORT, 'refuels and fuel drops cannot be deleted'); END;`);
     this.db.prepare("INSERT INTO meta (k, v) VALUES ('schema', '2') ON CONFLICT (k) DO UPDATE SET v = excluded.v").run();
   }
 

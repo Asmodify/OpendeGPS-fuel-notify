@@ -275,7 +275,24 @@ main { padding: 16px 20px 48px; }
 .excel-path { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; color: var(--ink); }
 .excel-warn { display: flex; align-items: center; gap: 6px; color: var(--warn-ink); font-weight: 600; margin-top: 3px; }
 .excel-warn .ic { width: 15px; height: 15px; }
-.excel-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.excel-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* fuel receipts check (Report) */
+.receipts-card { margin-bottom: 14px; }
+.receipts-card .rc-head { border: 0; box-shadow: none; background: none; }
+.receipts-card .excel-ico { background: var(--crit-bg); color: var(--crit-ink); }
+.rc-add { padding: 0 16px 14px; border-top: 1px solid var(--line); }
+.rc-add textarea { display: block; width: 100%; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--surface); font-family: ui-monospace, Consolas, monospace; font-size: 13px; resize: vertical; tab-size: 12; }
+.rc-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+.rc-msg { font-size: 13px; min-width: 0; }
+.rc-list:not(:empty) { border-top: 1px solid var(--line); }
+.rc-empty { padding: 10px 16px; margin: 0; }
+.rc-tbl tbody tr { cursor: pointer; }
+.tbl.rc-tbl th { position: static; padding: 9px 12px; } /* inside .table-scroll a sticky header would stick to the scroll box, not the page */
+.rc-tbl th, .rc-tbl td { white-space: nowrap; } /* phones scroll the table sideways instead of squeezing it */
+.rc-tbl .rc-x { width: 44px; text-align: right; }
+.rc-bad { color: var(--crit-ink); }
+.rc-good { color: var(--good-ink); }
+.chip.rc-ok { background: var(--good-bg); color: var(--good-ink); }
 .btn.busy { opacity: .6; pointer-events: none; cursor: progress; }
 a.btn { text-decoration: none; }
 .lead { color: var(--ink-2); margin: 6px 0 14px; max-width: 70ch; }
@@ -284,7 +301,7 @@ a.btn { text-decoration: none; }
 .row-between.wrap { flex-wrap: wrap; }
 
 /* ------------------------------------------------------------ tiles */
-.tiles { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+.tiles { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 10px; }
 .report-tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .tile {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
@@ -333,6 +350,7 @@ button.tile:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
 .tbl.mini td, .tbl.mini th { padding: 5px 10px; font-size: 12.5px; }
 .vname { font-weight: 620; white-space: nowrap; }
 .vsub { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.vsub.gps-bad { color: var(--crit-ink); font-weight: 550; }
 .m-only { display: none; }
 .c-fuel { min-width: 150px; }
 .c-seen { white-space: nowrap; }

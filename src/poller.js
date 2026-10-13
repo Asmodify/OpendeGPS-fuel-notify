@@ -36,6 +36,7 @@ import { log, errText, mapPool } from './util.js';
 
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
+const FETCH_CHUNK_MS = 5 * DAY; // history per request: few requests (API call limit), ~5 MB each
 const MIN = 60e3;
 const OVERLAP_MS = 10 * MIN; // re-fetch this much before the last stored message
 const HOLD_RECHECK_MS = 20 * MIN; // a vehicle waiting for its backlog is re-fetched each poll after this
@@ -342,6 +343,7 @@ export class Poller {
     bf.durationMs = bf.finishedAt - now;
     this.engine.historyReady = true;
     this.engine.checkPendingDrains(); // fuel drops held for the 5 h check
+    this.engine.checkReceipts(); // fuel receipts vs. the refuels recorded
     this.engine.saveLearned();
     if (lastErr) this.recordError('messages', lastErr, ` (backfill: ${bf.failed}/${bf.total} vehicles failed, retried in the next cycle)`, bf.failed < bf.total);
     else if (todo.length) this.markOk('messages');
@@ -370,7 +372,7 @@ export class Poller {
       // never ask for the future (a tracker clock ahead would otherwise pin lastT there)
       const to = Math.min(Math.max(now, seen ?? 0) + 60e3, now + 5 * MIN);
       const maxBack = Math.max(this.cfg.backfillHours * HOUR, 30 * MIN);
-      // counted back from `to`, so a full backfill is exactly backfillHours / 24 one-day requests
+      // counted back from `to`; fetched in FETCH_CHUNK_MS pieces (a 31-day backfill = 7 requests)
       const floor = to - maxBack;
       let mode = rec.historicalNext ? 'backfill' : 'live';
       let hole = false;
@@ -395,7 +397,7 @@ export class Poller {
       const nothingToFetch = (rec.lastT === null || rec.lastT === undefined) && seen != null && seen < from;
       const rows = [];
       for (let a = from; a < to && !nothingToFetch && !this.stopped;) {
-        const b = Math.min(to, a + DAY);
+        const b = Math.min(to, a + FETCH_CHUNK_MS);
         let r;
         try {
           r = await this.api.getMessages(rec.imei, a, b);
@@ -456,6 +458,7 @@ export class Poller {
     this.status.lastMessages = { vehicles: due.length, deferred: waiting - due.length, samples, failed, durationMs: Date.now() - t0, waitingForBacklog: this.engine.heldCount() };
     this.engine.stats.heldVehicles = this.engine.heldCount();
     this.engine.checkPendingDrains(); // fuel drops held for the 5 h check
+    this.engine.checkReceipts(); // fuel receipts vs. the refuels recorded
     this.engine.saveLearned();
     if (failed) this.recordError('messages', lastErr, ` (${failed}/${due.length} vehicles failed, retried next cycle)`, failed < due.length);
     else this.markOk('messages');

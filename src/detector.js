@@ -40,11 +40,11 @@ const HOUR = 3_600_000;
 export const ALERT_TYPES = {
   fuel_drain: { severity: 'critical', label: 'Fuel drain' },
   power_cut: { severity: 'critical', label: 'Tracker power cut' },
-  sensor_lost: { severity: 'warning', label: 'Fuel sensor fault' },
+  sensor_lost: { severity: 'critical', label: 'Fuel sensor fault' },
   low_fuel: { severity: 'warning', label: 'Low fuel' },
   long_idle: { severity: 'warning', label: 'Long idle' },
   overspeed: { severity: 'warning', label: 'Overspeed' },
-  offline: { severity: 'warning', label: 'Offline' },
+  offline: { severity: 'critical', label: 'Offline' },
   server_event: { severity: 'warning', label: 'GPS server event' },
   after_hours: { severity: 'warning', label: 'After-hours movement' },
   refuel: { severity: 'info', label: 'Refuel' },
@@ -1348,7 +1348,11 @@ export class VehicleDetector {
         const [x0, y0] = tb[i - 1];
         if (mv <= x1) return x1 === x0 ? y1 : y0 + ((mv - x0) * (y1 - y0)) / (x1 - x0);
       }
-      return tb[tb.length - 1][1];
+      // above the top point: full tanks read past it (see ledger.js aboveTableTop)
+      const [x0, y0] = tb[tb.length - 2];
+      const [x1, y1] = tb[tb.length - 1];
+      const m = Math.min(mv, Math.max(x1, 10000));
+      return x1 === x0 ? y1 : y1 + ((m - x1) * (y1 - y0)) / (x1 - x0);
     }
     if (!cal.tankLiters) return null;
     return (Math.max(0, Math.min(100, this.pct(mv, cal))) / 100) * cal.tankLiters;

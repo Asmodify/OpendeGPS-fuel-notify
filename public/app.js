@@ -9,75 +9,76 @@ import { FuelChart } from './chart.js';
 
 const HOUR = 3600e3;
 const SEVS = ['critical', 'warning', 'info'];
-const SEV_LABEL = { critical: 'Critical', warning: 'Warning', info: 'Info', good: 'Done' };
+const SEV_LABEL = { critical: 'Ноцтой', warning: 'Сэрэмжлүүлэг', info: 'Мэдээлэл', good: 'Болсон' };
 const SEV_ICON = { critical: 'octagon', warning: 'triangle', info: 'info', good: 'check' };
 const FALLBACK_TYPES = {
-  fuel_drain: { severity: 'critical', label: 'Fuel drain' },
-  power_cut: { severity: 'critical', label: 'Tracker power cut' },
-  sensor_lost: { severity: 'warning', label: 'Fuel sensor lost' },
-  low_fuel: { severity: 'warning', label: 'Low fuel' },
-  long_idle: { severity: 'warning', label: 'Long idle' },
-  overspeed: { severity: 'warning', label: 'Overspeed' },
-  offline: { severity: 'warning', label: 'Offline' },
-  server_event: { severity: 'warning', label: 'GPS server event' },
-  after_hours: { severity: 'warning', label: 'After-hours movement' },
-  refuel: { severity: 'info', label: 'Refuel' },
-  sensor_restored: { severity: 'info', label: 'Sensor restored' },
-  power_restored: { severity: 'info', label: 'Power restored' },
-  back_online: { severity: 'info', label: 'Back online' },
+  fuel_drain: { severity: 'critical', label: 'Түлш алдагдал' },
+  power_cut: { severity: 'critical', label: 'Трекерийн тэжээл тасарсан' },
+  sensor_lost: { severity: 'critical', label: 'Түлшний мэдрэгч ажиллахгүй' },
+  low_fuel: { severity: 'warning', label: 'Түлш бага' },
+  long_idle: { severity: 'warning', label: 'Удаан сул ажилласан' },
+  overspeed: { severity: 'warning', label: 'Хурд хэтрүүлсэн' },
+  offline: { severity: 'critical', label: 'Холболт тасарсан' },
+  server_event: { severity: 'warning', label: 'GPS серверийн үйл явдал' },
+  after_hours: { severity: 'warning', label: 'Ажлын бус цагт хөдөлсөн' },
+  refuel: { severity: 'info', label: 'Түлш цэнэглэлт' },
+  sensor_restored: { severity: 'info', label: 'Түлшний мэдрэгч сэргэсэн' },
+  power_restored: { severity: 'info', label: 'Тэжээл сэргэсэн' },
+  back_online: { severity: 'info', label: 'Дахин холбогдсон' },
+  receipt_mismatch: { severity: 'critical', label: 'Баримт зөрсөн' },
 };
 const TYPE_ICON = {
   fuel_drain: 'drop-down', refuel: 'drop-up', power_cut: 'bolt-off', power_restored: 'bolt', sensor_lost: 'sensor-off',
   sensor_restored: 'sensor', low_fuel: 'fuel', long_idle: 'clock', overspeed: 'gauge', offline: 'wifi-off',
-  back_online: 'wifi', server_event: 'server', after_hours: 'moon',
+  back_online: 'wifi', server_event: 'server', after_hours: 'moon', receipt_mismatch: 'sheet',
 };
 // Owner's verdict on a fuel drain (saved in the Excel fuel ledger)
-const VERDICTS = { unchecked: 'Unchecked', confirmed: 'Confirmed theft', false_alarm: 'False alarm' };
+const VERDICTS = { unchecked: 'Шалгаагүй', confirmed: 'Хулгай батлагдсан', false_alarm: 'Худал дохио' };
 const LEDGER_TYPES = ['refuel', 'fuel_drain'];
 const NOTE_MAX = 500;
 const STATUS = {
-  moving: { label: 'Moving', long: 'Driving now', order: 0 },
-  idle: { label: 'Idle', long: 'Idle — engine on, not moving', order: 1 },
-  parked: { label: 'Parked', long: 'Parked — engine off', order: 2 },
-  offline: { label: 'Offline', long: 'Not reporting', order: 3 },
+  moving: { label: 'Явж байна', long: 'Одоо явж байна', order: 0 },
+  idle: { label: 'Асаалттай зогссон', long: 'Хөдөлгүүр асаалттай, хөдлөхгүй зогсож байна', order: 1 },
+  parked: { label: 'Зогсоолд', long: 'Зогсоолд — хөдөлгүүр унтраастай', order: 2 },
+  offline: { label: 'Холбогдоогүй', long: 'Мэдээлэл ирэхгүй байна', order: 3 },
 };
 
 // Alert rule definitions (global settings form + per-vehicle overrides)
 const RULES = [
   {
-    group: 'Fuel', items: [
-      { k: 'drainParkedMv', label: 'Fuel drop while parked', unit: 'mV', min: 50, max: 5000, step: 10, eq: true,
-        help: 'Critical alert when the settled fuel level falls by more than this while the vehicle stands still — including when the battery switch was off and the level is lower after power comes back. The litres this means for your tanks are shown next to the box.' },
-      { k: 'drainTripMv', label: 'Unexplained loss on a trip', unit: 'mV', min: 100, max: 10000, step: 10, eq: true,
-        help: 'Critical alert when, after a trip, the tank holds less than expected (engine hours × normal consumption) by more than this.' },
-      { k: 'consumptionMvPerHour', label: 'Normal consumption', unit: 'mV / hour', min: 10, max: 5000, step: 10, eq: true, per: '/h',
-        help: 'How much the level normally falls per hour of engine running. Used to judge whether a trip used too much; heavy consumers get a higher allowance learned from their own trips, never a lower one. A typical truck uses about 400–600.' },
-      { k: 'refuelMv', label: 'Refuel detected above', unit: 'mV', min: 50, max: 5000, step: 10, eq: true,
-        help: 'A rise of the settled level bigger than this is logged as a refuel (information only).' },
-      { k: 'lowFuelPct', label: 'Low fuel warning below', unit: '% of tank', min: 0, max: 100, step: 1,
-        help: 'Warning when the tank is emptier than this.' },
+    group: 'Түлш', items: [
+      { k: 'drainParkedMv', label: 'Зогсоолд түлш буурах', unit: 'мВ', min: 50, max: 5000, step: 10, eq: true,
+        help: 'Машин зогсож байхад тогтворжсон түлшний түвшин үүнээс их буурвал ноцтой анхааруулга өгнө — масс таслуур унтраатай байгаад тэжээл орсны дараа түвшин бага байх үед ч мөн адил. Энэ нь таны савнуудад хэдэн литр болохыг хажууд нь харуулна.' },
+      { k: 'drainTripMv', label: 'Аялалд тайлбаргүй алдагдал', unit: 'мВ', min: 100, max: 10000, step: 10, eq: true,
+        help: 'Аялалын дараа саван дахь түлш хүлээгдэж буйгаас (хөдөлгүүрийн цаг × хэвийн зарцуулалт) үүнээс илүү бага байвал ноцтой анхааруулга өгнө.' },
+      { k: 'consumptionMvPerHour', label: 'Хэвийн зарцуулалт', unit: 'мВ / цаг', min: 10, max: 5000, step: 10, eq: true, per: '/ц',
+        help: 'Хөдөлгүүр ажиллах цаг тутамд түвшин хэвийн үед хэр буурдаг вэ. Аялалд хэт их зарцуулсан эсэхийг үүгээр дүгнэнэ; их зарцуулдаг машинд өөрийн аяллаас сурсан илүү их хэмжээ зөвшөөрөгдөнө, хэзээ ч бага биш. Ердийн ачааны машин ойролцоогоор 400–600.' },
+      { k: 'refuelMv', label: 'Цэнэглэлт гэж тооцох доод хэмжээ', unit: 'мВ', min: 50, max: 5000, step: 10, eq: true,
+        help: 'Тогтворжсон түвшин үүнээс их өсвөл түлш цэнэглэлт гэж бүртгэнэ (зөвхөн мэдээлэл).' },
+      { k: 'lowFuelPct', label: 'Түлш багын сэрэмжлүүлэг', unit: '% (савны)', min: 0, max: 100, step: 1,
+        help: 'Сав үүнээс хоосон болбол сэрэмжлүүлнэ.' },
     ],
   },
   {
-    group: 'Sensor and tracker power', items: [
-      { k: 'sensorMinValidMv', label: 'Fuel sensor dead below', unit: 'mV', min: 0, max: 2000, step: 1,
-        help: 'A reading under this value while the tracker has power means the fuel sensor is disconnected or broken (warning). Dead sensors typically read 0, 43 or 87 mV.' },
-      { k: 'powerCutMv', label: 'Tracker power lost below', unit: 'mV', min: 0, max: 30000, step: 100,
-        help: 'If the tracker’s external supply drops below this while the vehicle is moving, someone may have disconnected it (critical). 24 V trucks normally read 24 000–28 000 mV. Power going off while parked (battery master switch) is normal and not alerted.' },
+    group: 'Мэдрэгч ба трекерийн тэжээл', items: [
+      { k: 'sensorMinValidMv', label: 'Түлшний мэдрэгч ажиллахгүй гэж тооцох', unit: 'мВ', min: 0, max: 2000, step: 1,
+        help: 'Трекер тэжээлтэй байхад заалт үүнээс бага бол түлшний мэдрэгч салсан эсвэл эвдэрсэн гэсэн үг (сэрэмжлүүлэг). Ажиллахгүй мэдрэгч ихэвчлэн 0, 43 эсвэл 87 мВ заадаг.' },
+      { k: 'powerCutMv', label: 'Трекерийн тэжээл тасарсан гэж тооцох', unit: 'мВ', min: 0, max: 30000, step: 100,
+        help: 'Машин явж байхад трекерийн гадаад тэжээл үүнээс доош унавал хэн нэгэн салгасан байж болзошгүй (ноцтой). 24 В-ын машин ихэвчлэн 24 000–28 000 мВ заадаг. Зогсоолд тэжээл унтрах (масс таслуур) нь хэвийн тул анхааруулга өгөхгүй.' },
     ],
   },
   {
-    group: 'Driving', items: [
-      { k: 'overspeedKmh', label: 'Speed limit', unit: 'km/h', min: 10, max: 250, step: 1, help: 'Warning when a vehicle drives faster than this.' },
-      { k: 'idleMinutes', label: 'Long idle after', unit: 'minutes', min: 1, max: 1440, step: 1, help: 'Warning when the engine runs without the vehicle moving for longer than this (wastes fuel).' },
-      { k: 'offlineMinutes', label: 'Offline after', unit: 'minutes', min: 5, max: 10080, step: 1, help: 'Warning when a vehicle that was reporting goes silent for longer than this. Vehicles that went silent while the program was not running are recorded as history, without a pop-up.' },
+    group: 'Жолоодлого', items: [
+      { k: 'overspeedKmh', label: 'Хурдны хязгаар', unit: 'км/ц', min: 10, max: 250, step: 1, help: 'Машин үүнээс хурдан явбал сэрэмжлүүлнэ.' },
+      { k: 'idleMinutes', label: 'Удаан сул ажиллах хугацаа', unit: 'минут', min: 0, max: 1440, step: 1, help: 'Машин хөдлөхгүйгээр хөдөлгүүр үүнээс удаан ажиллавал сэрэмжлүүлнэ. 0 = унтраалттай (сул ажиллагааны анхааруулга өгөхгүй).' },
+      { k: 'offlineMinutes', label: 'Холбогдоогүй гэж тооцох хугацаа', unit: 'минут', min: 5, max: 10080, step: 1, help: 'Үүнээс удаан мэдээлэл ирээгүй машиныг холбогдоогүй гэж харуулна. Анхааруулга зөвхөн 6 цаг чимээгүй болсны дараа, эсвэл холбогдоогүй байх хугацаандаа түлшний түвшин өөрчлөгдөөд дахин мэдээлсэн үед өгнө. Программ ажиллаагүй үед болсон анхааруулгыг түүхэнд бүртгэж, гарч ирэх мэдэгдэлгүй хадгална.' },
     ],
   },
   {
-    group: 'Night-time movement', items: [
-      { k: 'afterHoursEnabled', type: 'bool', label: 'Warn when a vehicle moves at night', help: 'Useful if vehicles should stay parked overnight.' },
-      { k: 'afterHoursStart', type: 'time', label: 'Night starts at', help: 'Local time.' },
-      { k: 'afterHoursEnd', type: 'time', label: 'Night ends at', help: 'Local time.' },
+    group: 'Шөнийн хөдөлгөөн', items: [
+      { k: 'afterHoursEnabled', type: 'bool', label: 'Машин шөнө хөдөлбөл сэрэмжлүүлэх', help: 'Машинууд шөнөжин зогсоолд байх ёстой бол хэрэгтэй.' },
+      { k: 'afterHoursStart', type: 'time', label: 'Шөнө эхлэх цаг', help: 'Орон нутгийн цаг.' },
+      { k: 'afterHoursEnd', type: 'time', label: 'Шөнө дуусах цаг', help: 'Орон нутгийн цаг.' },
     ],
   },
 ];
@@ -103,7 +104,7 @@ const S = {
   conn: 'connecting',
   es: null,
   sseDropped: false,
-  fleet: { q: '', group: '', status: '', fuel: false, problems: false, sort: 'alerts', dir: -1, ...pick(loadPref('fleet', {}), ['group', 'status', 'fuel', 'problems', 'sort', 'dir']) },
+  fleet: { q: '', group: '', status: '', fuel: false, problems: false, gps: false, sort: 'alerts', dir: -1, ...pick(loadPref('fleet', {}), ['group', 'status', 'fuel', 'problems', 'gps', 'sort', 'dir']) },
   map: { filter: loadPref('mapFilter', 'all'), names: loadPref('mapNames', false) },
   alerts: {
     list: [], loading: false, error: null, hasMore: false, loaded: false, newIds: new Set(),
@@ -111,6 +112,7 @@ const S = {
     temp: null, // { label }: a shortcut (counter badge, "All alerts for this vehicle") is showing its own filter
   },
   report: { hours: 24, rows: null, loading: false, error: null, sort: 'used', dir: -1, loadedAt: 0 },
+  receipts: { data: null, loading: false, error: null, loadedAt: 0, filter: loadPref('receiptsFilter', 'problems') },
   seen: new Set(),
   prefs: { sound: loadPref('sound', true), bsev: loadPref('bsev', ['critical', 'warning']), theme: loadPref('theme', 'auto') },
   detail: null,
@@ -125,13 +127,13 @@ function pick(o, keys) {
   return out;
 }
 const now = () => Date.now() + S.skew;
-const typeInfo = (t) => S.meta.alertTypes?.[t] || FALLBACK_TYPES[t] || { severity: 'warning', label: String(t || 'Alert').replace(/_/g, ' ') };
+const typeInfo = (t) => S.meta.alertTypes?.[t] || FALLBACK_TYPES[t] || { severity: 'warning', label: String(t || 'Анхааруулга').replace(/_/g, ' ') };
 const typeLabel = (t) => typeInfo(t).label;
 const shortName = (n) => String(n ?? '').replace(/\s*\/?\s*Түлш(?:ний)?\s+мэдрэгчтэй\s*\/?\s*/giu, ' ').trim();
 const groupKey = (g) => (g === null || g === undefined || g === '' ? '__none' : String(g));
-const groupLabel = (g) => (g === null || g === undefined || g === '' ? 'No group' : String(g));
+const groupLabel = (g) => (g === null || g === undefined || g === '' ? 'Бүлэггүй' : String(g));
 const vName = (imei, fallback) => S.byImei.get(String(imei))?.shortName || shortName(fallback) || String(imei ?? '');
-const aName = (a) => S.byImei.get(a.imei)?.shortName || a.shortName || shortName(a.name) || a.imei || 'GPS server';
+const aName = (a) => S.byImei.get(a.imei)?.shortName || a.shortName || shortName(a.name) || a.imei || 'GPS сервер';
 const validLatLng = (v) => isNum(v.lat) && isNum(v.lng) && !(Number(v.lat) === 0 && Number(v.lng) === 0) && Math.abs(v.lat) <= 90 && Math.abs(v.lng) <= 180;
 const calFor = (imei) => S.byImei.get(String(imei))?.cal || normCal(S.settings?.vehicles?.[imei]?.cal);
 const thFor = (imei) => ({ ...(S.settings?.thresholds || {}), ...(S.settings?.vehicles?.[imei]?.th || {}) });
@@ -152,6 +154,8 @@ function normVehicle(v) {
   o.angle = isNum(v.angle) ? Number(v.angle) : 0;
   o.ign = isNum(v.ign) ? Number(v.ign) : null;
   o.pwrMv = isNum(v.pwrMv) ? Number(v.pwrMv) : null;
+  o.gps = v.gps && typeof v.gps === 'object' ? { valid: isNum(v.gps.valid) ? Number(v.gps.valid) : null, sats: isNum(v.gps.sats) ? Number(v.gps.sats) : null } : null;
+  o.gpsFault = v.gpsFault && typeof v.gpsFault === 'object' ? { code: String(v.gpsFault.code ?? ''), text: String(v.gpsFault.text ?? '') } : null;
   o.hasFuel = !!v.hasFuel;
   o.muted = !!v.muted;
   o.fuel = v.fuel && typeof v.fuel === 'object' ? { ...v.fuel, trustedAt: toMs(v.fuel.trustedAt), mv: isNum(v.fuel.mv) ? Number(v.fuel.mv) : null } : null;
@@ -173,15 +177,22 @@ function normAlert(a) {
   return o;
 }
 const hasProblem = (v) => v.activeAlerts.critical > 0 || v.activeAlerts.warning > 0 || (v.hasFuel && v.fuel?.sensorOk === false);
+/** Why the vehicle's GPS tracker looks broken (judged by the server, src/fleetstatus.js), or null. */
+function gpsFault(v) {
+  const g = v.gpsFault;
+  if (!g) return null;
+  if (g.code === 'silent' && v.lastSeen) return `${fmtDur(now() - v.lastSeen)} мэдээлэлгүй`; // kept current between refreshes
+  return g.text || 'Ажиллахгүй';
+}
 const topSev = (v) => (v.activeAlerts.critical > 0 ? 'critical' : v.activeAlerts.warning > 0 ? 'warning' : null);
 const problemScore = (v) => (v.activeAlerts.critical || 0) * 1e6 + (v.activeAlerts.warning || 0) * 1e3 + (v.hasFuel && v.fuel?.sensorOk === false ? 1 : 0);
 
 // ---------------------------------------------------------------- small render helpers
-const relSpan = (ms) => (isNum(ms) ? html`<span data-rel="${ms}" title="${fmtFull(ms)}">${fmtRel(ms, now())}</span>` : html`<span>never</span>`);
+const relSpan = (ms) => (isNum(ms) ? html`<span data-rel="${ms}" title="${fmtFull(ms)}">${fmtRel(ms, now())}</span>` : html`<span>хэзээ ч</span>`);
 const statusPill = (v) => html`<span class="pill st-${v.status}" title="${statusLong(v)}">${STATUS[v.status].label}</span>`;
 function statusLong(v) {
-  if (v.status === 'idle' && isNum(v.idleSince) && v.idleSince < now()) return `Engine running, not moving for ${fmtDur(now() - v.idleSince)}`;
-  if (v.status === 'offline' && v.lastSeen) return `Not reporting since ${fmtFull(v.lastSeen)}`;
+  if (v.status === 'idle' && isNum(v.idleSince) && v.idleSince < now()) return `Хөдөлгүүр асаалттай, ${fmtDur(now() - v.idleSince)} хөдлөөгүй`;
+  if (v.status === 'offline' && v.lastSeen) return `${fmtFull(v.lastSeen)}-с хойш мэдээлэл ирээгүй`;
   return STATUS[v.status].long;
 }
 
@@ -211,33 +222,33 @@ function fuelState(v) {
   return 'wait';
 }
 function fuelCell(v) {
-  if (!v.hasFuel) return html`<span class="muted small">No fuel sensor</span>`;
+  if (!v.hasFuel) return html`<span class="muted small">Түлшний мэдрэгчгүй</span>`;
   const f = v.fuel;
   const fs = fuelState(v);
   if (fs === 'fault') {
-    return html`<div class="gauge nosig" title="The fuel sensor is not giving valid readings — it may be disconnected or broken."><span class="gbar"><i></i></span><span class="gtxt"><b>No signal</b><small>sensor fault</small></span></div>`;
+    return html`<div class="gauge nosig" title="Түлшний мэдрэгч хүчинтэй заалт өгөхгүй байна — салсан эсвэл эвдэрсэн байж болзошгүй."><span class="gbar"><i></i></span><span class="gtxt"><b>Дохиогүй</b><small>мэдрэгчийн гэмтэл</small></span></div>`;
   }
   if (fs === 'offline') {
-    return html`<div class="gauge wait" title="${v.lastSeen ? `No data since ${fmtFull(v.lastSeen)}` : 'No data from this vehicle'}"><span class="gbar"></span><span class="gtxt"><span class="muted">No data</span><small>${v.lastSeen ? `offline since ${fmtTime(v.lastSeen, now())}` : 'offline'}</small></span></div>`;
+    return html`<div class="gauge wait" title="${v.lastSeen ? `${fmtFull(v.lastSeen)}-с хойш мэдээлэл алга` : 'Энэ машинаас мэдээлэл ирээгүй'}"><span class="gbar"></span><span class="gtxt"><span class="muted">Мэдээлэл алга</span><small>${v.lastSeen ? `${fmtTime(v.lastSeen, now())}-с хойш` : 'холбогдоогүй'}</small></span></div>`;
   }
   const pct = fuelPct(v);
   if (fs === 'wait') {
-    return html`<div class="gauge wait" title="The level is measured while the vehicle is parked. Waiting for a steady reading."><span class="gbar"></span><span class="gtxt"><span class="muted">Waiting…</span><small>not yet measured</small></span></div>`;
+    return html`<div class="gauge wait" title="Түвшинг машин зогсож байхад хэмждэг. Тогтвортой заалт хүлээж байна."><span class="gbar"></span><span class="gtxt"><span class="muted">Хүлээж байна…</span><small>хэмжигдээгүй</small></span></div>`;
   }
   const low = Number(thFor(v.imei).lowFuelPct ?? 10);
   const p = clamp(pct, 0, 100);
   const L = fuelLitres(v);
   const stale = f.trustedAt && now() - f.trustedAt > 12 * HOUR;
   const cls = p <= low ? 'low' : p <= 25 ? 'mid' : '';
-  const title = `${fmtNum(f.mv)} mV${f.trustedAt ? ` — measured ${fmtRel(f.trustedAt, now())} (${fmtFull(f.trustedAt)}) while parked` : ''}`;
-  return html`<div class="gauge ${cls}${stale ? ' stale' : ''}" title="${title}"><span class="gbar"><i style="width:${p.toFixed(1)}%"></i></span><span class="gtxt"><b>${fmtNum(p)}%</b><small>${L !== null ? `${fmtNum(L)} L` : `${fmtNum(f.mv)} mV`}</small></span></div>`;
+  const title = `${fmtNum(f.mv)} мВ${f.trustedAt ? ` — зогсоолд хэмжсэн: ${fmtRel(f.trustedAt, now())} (${fmtFull(f.trustedAt)})` : ''}`;
+  return html`<div class="gauge ${cls}${stale ? ' stale' : ''}" title="${title}"><span class="gbar"><i style="width:${p.toFixed(1)}%"></i></span><span class="gtxt"><b>${fmtNum(p)}%</b><small>${L !== null ? `${fmtNum(L)} л` : `${fmtNum(f.mv)} мВ`}</small></span></div>`;
 }
 function alertBadges(a, muted) {
   const out = [];
-  if (a.critical) out.push(html`<span class="badge crit" title="${a.critical} unacknowledged critical alert(s)">${icon('octagon')}${a.critical}</span>`);
-  if (a.warning) out.push(html`<span class="badge warn" title="${a.warning} unacknowledged warning(s)">${icon('triangle')}${a.warning}</span>`);
-  if (muted) out.push(html`<span class="badge mute" title="Notifications muted for this vehicle">${icon('mute')}</span>`);
-  if (!a.critical && !a.warning) out.unshift(html`<span class="ok-mark" title="No open alerts">${icon('check')}</span>`);
+  if (a.critical) out.push(html`<span class="badge crit" title="Танилцаагүй ноцтой анхааруулга: ${a.critical}">${icon('octagon')}${a.critical}</span>`);
+  if (a.warning) out.push(html`<span class="badge warn" title="Танилцаагүй сэрэмжлүүлэг: ${a.warning}">${icon('triangle')}${a.warning}</span>`);
+  if (muted) out.push(html`<span class="badge mute" title="Энэ машины мэдэгдлийг хаасан">${icon('mute')}</span>`);
+  if (!a.critical && !a.warning) out.unshift(html`<span class="ok-mark" title="Нээлттэй анхааруулга алга">${icon('check')}</span>`);
   return out;
 }
 function emptyState(ic, title, body, action) {
@@ -255,7 +266,7 @@ function toast({ sev = 'info', title, body, action, timeout }) {
   el.setAttribute('role', sev === 'critical' ? 'alert' : 'status');
   setHTML(el, html`<div class="toast-ico">${icon(SEV_ICON[sev] || 'info')}</div>
     <div class="toast-body"><b>${title}</b>${body ? html`<div class="toast-text">${body}</div>` : ''}${action ? html`<button type="button" class="link toast-act">${action.label}</button>` : ''}</div>
-    <button type="button" class="icon-btn toast-x" aria-label="Dismiss">${icon('x')}</button>`);
+    <button type="button" class="icon-btn toast-x" aria-label="Хаах">${icon('x')}</button>`);
   const close = () => { el.classList.add('out'); setTimeout(() => el.remove(), 220); };
   el.querySelector('.toast-x').addEventListener('click', close);
   if (action) el.querySelector('.toast-act').addEventListener('click', () => { action.fn(); close(); });
@@ -272,48 +283,48 @@ function renderBanners() {
   if (pendingNew.size) {
     const n = pendingNew.size;
     const sev = [...pendingNew.values()].some((x) => x.severity === 'critical') ? 'critical' : 'warning';
-    out.push(b(sev, 'bell', `${n} new alert${n === 1 ? '' : 's'}`, 'Refresh to see them in the lists.',
-      html`<button type="button" class="btn small primary" data-action="refresh-new">Refresh</button>`));
+    out.push(b(sev, 'bell', `${n} шинэ анхааруулга`, 'Жагсаалтад харахын тулд шинэчилнэ үү.',
+      html`<button type="button" class="btn small primary" data-action="refresh-new">Шинэчлэх</button>`));
   }
   if (S.serverDown) {
     out.push(S.mode === 'cloud'
-      ? b('critical', 'server', 'Cannot reach the Fuel Tank Warner server.', 'Check the internet connection. Retrying automatically…')
-      : b('critical', 'server', 'Cannot reach the Fuel Tank Warner program on this computer.', 'Make sure it is running (start.bat). Retrying automatically…'));
+      ? b('critical', 'server', 'Fuel Tank Warner сервертэй холбогдож чадахгүй байна.', 'Интернэт холболтоо шалгана уу. Автоматаар дахин оролдож байна…')
+      : b('critical', 'server', 'Энэ компьютер дээрх Fuel Tank Warner программтай холбогдож чадахгүй байна.', 'Программ ажиллаж байгаа эсэхийг шалгана уу (start.bat). Автоматаар дахин оролдож байна…'));
   } else if (S.status) {
     const st = S.status;
     const lp = toMs(st.lastObjectsPoll);
     const paused = toMs(st.pausedUntil);
     if (paused && paused > now()) {
-      out.push(b('warning', 'clock', 'The GPS server’s call limit is reached.', `Not asking it again until ${fmtTime(paused, now())} (asking more often would keep the limit hit) — showing the last known data; new refuels and thefts are checked after that.`));
+      out.push(b('warning', 'clock', 'GPS серверийн хүсэлтийн хязгаарт хүрсэн.', `${fmtTime(paused, now())} хүртэл дахин хүсэлт илгээхгүй (олон дахин асуувал хязгаар хэвээр үлдэнэ) — сүүлийн мэдээллийг харуулж байна; шинэ цэнэглэлт, хулгайг үүний дараа шалгана.`));
     } else if (st.apiOk === false) {
-      out.push(b('critical', 'wifi-off', 'The GPS server is not answering.', `${st.lastError ? String(st.lastError).slice(0, 200) + ' — ' : ''}showing the last known data, retrying automatically.`));
+      out.push(b('critical', 'wifi-off', 'GPS сервер хариу өгөхгүй байна.', `${st.lastError ? String(st.lastError).slice(0, 200) + ' — ' : ''}сүүлийн мэдээллийг харуулж, автоматаар дахин оролдож байна.`));
     } else if (lp && now() - lp > 5 * 60e3) {
-      out.push(b('warning', 'clock', `No fresh data for ${fmtDur(now() - lp)}.`, 'The GPS server has not been polled successfully recently.'));
+      out.push(b('warning', 'clock', `${fmtDur(now() - lp)} шинэ мэдээлэл ирээгүй.`, 'Сүүлийн үед GPS серверээс амжилттай мэдээлэл аваагүй байна.'));
     }
-    if (st.configError) out.push(b('warning', 'sliders', 'There is a problem in config.json.', String(st.configError).slice(0, 240)));
-    if (st.detector && st.detector.ok === false) out.push(b('critical', 'fuel', 'The fuel analysis module could not start.', `${st.detector.error ? String(st.detector.error).slice(0, 200) + ' — ' : ''}fuel alerts are not being checked.`));
+    if (st.configError) out.push(b('warning', 'sliders', 'config.json файлд алдаа байна.', String(st.configError).slice(0, 240)));
+    if (st.detector && st.detector.ok === false) out.push(b('critical', 'fuel', 'Түлшний шинжилгээний модуль эхэлж чадсангүй.', `${st.detector.error ? String(st.detector.error).slice(0, 200) + ' — ' : ''}түлшний анхааруулга шалгагдахгүй байна.`));
     const bf = st.backfill;
     if (bf && bf.running) {
       const pct = bf.total ? clamp((bf.done / bf.total) * 100, 0, 100) : 0;
-      out.push(b('info', 'refresh', `Catching up on history: ${fmtNum(bf.done ?? 0)} of ${fmtNum(bf.total ?? 0)} vehicles.`, 'Alerts found in past data are marked “History” and do not send notifications.', html`<span class="progress" aria-hidden="true"><i style="width:${pct.toFixed(0)}%"></i></span>`));
+      out.push(b('info', 'refresh', `Түүхийг нөхөж байна: ${fmtNum(bf.total ?? 0)} машинаас ${fmtNum(bf.done ?? 0)}.`, 'Өмнөх мэдээллээс олдсон анхааруулгыг “Түүх” гэж тэмдэглэх бөгөөд мэдэгдэл илгээхгүй.', html`<span class="progress" aria-hidden="true"><i style="width:${pct.toFixed(0)}%"></i></span>`));
     }
     const x = st.excel;
     if (x && x.enabled && x.locked) {
-      out.push(b('warning', 'sheet', 'Excel file is open — it will be updated when you close it.', `${x.file || ''} — new refuels and thefts are kept safe in the meantime.`));
+      out.push(b('warning', 'sheet', 'Excel файл нээлттэй байна — хаасны дараа шинэчлэгдэнэ.', `${x.file || ''} — энэ хооронд шинэ цэнэглэлт, хулгай аюулгүй хадгалагдана.`));
     } else if (x && x.enabled && x.lastError) {
-      out.push(b('warning', 'sheet', 'The Excel fuel ledger could not be saved.', `${String(x.lastError).slice(0, 200)} — ${x.blocked ? 'tried again when something changes' : 'retrying every minute'}. Refuels and thefts are kept safe in the meantime.`));
+      out.push(b('warning', 'sheet', 'Excel түлшний бүртгэлийг хадгалж чадсангүй.', `${String(x.lastError).slice(0, 200)} — ${x.blocked ? 'өөрчлөлт гарахад дахин оролдоно' : 'минут тутам дахин оролдож байна'}. Энэ хооронд цэнэглэлт, хулгай аюулгүй хадгалагдана.`));
     }
   }
   if (!S.serverDown && S.settings && !loadPref('notifHintDismissed', false)) {
     const sevs = serverPopupSevs();
     if (sevs.length) {
       // the program already shows Windows pop-ups on this computer: browser pop-ups would only duplicate them
-      out.push(html`<div class="banner sev-hint">${icon('bell')}<div class="banner-text"><b>Windows pop-ups are on</b> <span>— ${sevs.map((x) => SEV_LABEL[x].toLowerCase()).join(' and ')} alerts pop up on this computer even when the browser is closed (change in Settings → Notifications).</span></div>
-        <button type="button" class="icon-btn" data-action="dismiss-notif-hint" aria-label="Dismiss">${icon('x')}</button></div>`);
+      out.push(html`<div class="banner sev-hint">${icon('bell')}<div class="banner-text"><b>Windows-ийн гарч ирэх мэдэгдэл асаалттай</b> <span>— ${sevs.map((x) => SEV_LABEL[x].toLowerCase()).join(' ба ')} анхааруулга хөтөч хаалттай байсан ч энэ компьютер дээр гарч ирнэ (Тохиргоо → Мэдэгдэл хэсэгт өөрчилнө).</span></div>
+        <button type="button" class="icon-btn" data-action="dismiss-notif-hint" aria-label="Хаах">${icon('x')}</button></div>`);
     } else if (notifSupported() && Notification.permission === 'default') {
-      out.push(html`<div class="banner sev-hint">${icon('bell')}<div class="banner-text"><b>Get a pop-up when fuel is drained</b> <span>— even while this tab is in the background.</span></div>
-        <button type="button" class="btn small primary" data-action="enable-notif">Turn on pop-ups</button>
-        <button type="button" class="icon-btn" data-action="dismiss-notif-hint" aria-label="Dismiss">${icon('x')}</button></div>`);
+      out.push(html`<div class="banner sev-hint">${icon('bell')}<div class="banner-text"><b>Түлш алдагдахад гарч ирэх мэдэгдэл авах</b> <span>— энэ цонх ард байсан ч.</span></div>
+        <button type="button" class="btn small primary" data-action="enable-notif">Мэдэгдэл асаах</button>
+        <button type="button" class="icon-btn" data-action="dismiss-notif-hint" aria-label="Хаах">${icon('x')}</button></div>`);
     }
   }
   setHTML($('#banners'), html`${out}`);
@@ -325,13 +336,13 @@ function renderConn() {
   el.dataset.state = state;
   const lp = toMs(S.status?.lastObjectsPoll);
   let txt;
-  if (state === 'down') txt = 'Server offline';
-  else if (S.conn === 'polling') txt = lp ? `Updated ${fmtRel(lp, now())}` : state === 'live' ? 'Online' : 'Connecting…';
-  else if (state === 'live') txt = lp ? `Live · updated ${fmtRel(lp, now())}` : 'Live';
-  else if (state === 'connecting') txt = 'Connecting…';
-  else txt = 'Reconnecting…';
+  if (state === 'down') txt = 'Сервер холбогдоогүй';
+  else if (S.conn === 'polling') txt = lp ? `Шинэчилсэн: ${fmtRel(lp, now())}` : state === 'live' ? 'Холбогдсон' : 'Холбогдож байна…';
+  else if (state === 'live') txt = lp ? `Шууд · шинэчилсэн: ${fmtRel(lp, now())}` : 'Шууд';
+  else if (state === 'connecting') txt = 'Холбогдож байна…';
+  else txt = 'Дахин холбогдож байна…';
   $('#conn-text').textContent = txt;
-  el.title = `Live updates: ${state === 'live' ? 'connected' : 'not connected'}${lp ? `\nLast GPS poll: ${fmtFull(lp)}` : ''}`;
+  el.title = `Шууд шинэчлэлт: ${state === 'live' ? 'холбогдсон' : 'холбогдоогүй'}${lp ? `\nGPS-ээс сүүлд авсан: ${fmtFull(lp)}` : ''}`;
 }
 
 function renderCounts() {
@@ -342,7 +353,7 @@ function renderCounts() {
   cw.querySelector('b').textContent = fmtNum(w);
   cc.classList.toggle('zero', !c);
   cw.classList.toggle('zero', !w);
-  cw.querySelector('.count-lab').textContent = w === 1 ? 'warning' : 'warnings';
+  cw.querySelector('.count-lab').textContent = 'сэрэмжлүүлэг';
   const tb = $('#tab-badge');
   tb.hidden = !(c + w);
   tb.textContent = c + w > 99 ? '99+' : String(c + w);
@@ -382,37 +393,37 @@ function renderNotifBtn() {
   b.querySelector('use').setAttribute('href', p === 'granted' ? '#i-bell' : '#i-bell-off');
   b.classList.toggle('on', p === 'granted');
   b.title = {
-    granted: 'Pop-up notifications are on',
-    default: 'Turn on pop-up notifications',
-    denied: 'Pop-ups are blocked — allow notifications for this site in the browser settings',
-    unsupported: 'Pop-ups are not available here. Open the dashboard on the server computer at http://localhost:8080',
+    granted: 'Гарч ирэх мэдэгдэл асаалттай',
+    default: 'Гарч ирэх мэдэгдэл асаах',
+    denied: 'Гарч ирэх мэдэгдэл хориглогдсон — хөтчийн тохиргооноос энэ сайтад мэдэгдлийг зөвшөөрнө үү',
+    unsupported: 'Энд гарч ирэх мэдэгдэл ажиллахгүй. Самбарыг сервер компьютер дээр http://localhost:8080 хаягаар нээнэ үү',
   }[p];
   b.setAttribute('aria-label', b.title);
   const sb = $('#btn-sound');
   sb.querySelector('use').setAttribute('href', S.prefs.sound ? '#i-volume' : '#i-volume-off');
   sb.classList.toggle('on', S.prefs.sound);
-  sb.title = S.prefs.sound ? 'Alarm sound for critical alerts is on (click to turn off)' : 'Alarm sound is off (click to turn on)';
+  sb.title = S.prefs.sound ? 'Ноцтой анхааруулгын дуут дохио асаалттай (дарж унтраана)' : 'Дуут дохио унтраалттай (дарж асаана)';
   sb.setAttribute('aria-label', sb.title);
   renderBrowserCard();
 }
 async function requestNotif() {
   if (!notifSupported()) {
-    toast({ sev: 'warning', title: 'Pop-ups not available', body: 'Browsers only allow notifications on a secure address. Open the dashboard on the server computer at http://localhost:8080.' });
+    toast({ sev: 'warning', title: 'Гарч ирэх мэдэгдэл боломжгүй', body: 'Хөтөч зөвхөн аюулгүй хаяг дээр мэдэгдэл зөвшөөрдөг. Самбарыг сервер компьютер дээр http://localhost:8080 хаягаар нээнэ үү.' });
     return;
   }
   if (Notification.permission === 'denied') {
-    toast({ sev: 'warning', title: 'Pop-ups are blocked', body: 'Click the lock icon next to the address bar and allow notifications for this site.' });
+    toast({ sev: 'warning', title: 'Гарч ирэх мэдэгдэл хориглогдсон', body: 'Хаягийн мөрний хажууд байгаа цоожны дүрс дээр дарж энэ сайтад мэдэгдлийг зөвшөөрнө үү.' });
     return;
   }
   if (Notification.permission === 'granted') {
-    toast({ sev: 'good', title: 'Pop-ups are already on', body: 'Use “Send test” to check them.' });
+    toast({ sev: 'good', title: 'Гарч ирэх мэдэгдэл аль хэдийн асаалттай', body: '“Турших” товчоор шалгана уу.' });
     return;
   }
   try { await Notification.requestPermission(); } catch { /* ignore */ }
   renderNotifBtn();
   renderBanners();
   if (Notification.permission === 'granted') {
-    try { new Notification('Pop-ups are on', { body: 'You will be told about fuel drains and other problems.', tag: 'ftw-perm' }); } catch { /* ignore */ }
+    try { new Notification('Гарч ирэх мэдэгдэл асаалттай', { body: 'Түлш алдагдал болон бусад асуудлын талаар мэдэгдэх болно.', tag: 'ftw-perm' }); } catch { /* ignore */ }
   }
 }
 /** Severities the server itself pops up on this computer (Windows toast). */
@@ -438,7 +449,7 @@ function notifyAlert(a) {
     sev: a.severity,
     title: `${name}: ${title}`,
     body: `${typeLabel(a.type)} · ${fmtTime(a.t, now())}${a.detail ? ' — ' + String(a.detail).slice(0, 140) : ''}`,
-    action: { label: 'Refresh & show', fn: () => { refreshNew(); openVehicle(a.imei, a.t); } },
+    action: { label: 'Шинэчлээд харах', fn: () => { refreshNew(); openVehicle(a.imei, a.t); } },
   });
   if (a.severity === 'critical' && S.prefs.sound) beep('critical');
   // the dashboard is only allowed pop-ups on this computer, where the program already shows
@@ -458,26 +469,26 @@ async function testNotification() {
   let body = '';
   if (S.features.windowsToast) try {
     const r = await api('/api/test-notification', { method: 'POST', body: {} });
-    const names = { windowsToast: 'Windows pop-up' };
+    const names = { windowsToast: 'Windows мэдэгдэл' };
     const parts = [];
     if (r && typeof r === 'object') {
       for (const [k, v] of Object.entries(r)) {
         if (!v || typeof v !== 'object' || !('ok' in v)) continue;
-        parts.push(`${names[k] || k}: ${v.ok ? 'sent' : (v.skipped ? 'not used' : 'failed') + (v.error ? ` (${v.error})` : '')}`);
+        parts.push(`${names[k] || k}: ${v.ok ? 'илгээсэн' : (v.skipped ? 'ашиглаагүй' : 'амжилтгүй') + (v.error ? ` (${v.error})` : '')}`);
       }
     }
-    body = parts.length ? parts.join('. ') + '.' : 'The server sent a test.';
+    body = parts.length ? parts.join('. ') + '.' : 'Сервер туршилтын мэдэгдэл илгээлээ.';
   } catch (e) {
-    body = `Server test failed: ${e.message}.`;
+    body = `Серверийн туршилт амжилтгүй: ${e.message}.`;
   }
   if (S.prefs.sound) beep('critical');
   const p = notifSupported() ? Notification.permission : 'unsupported';
   if (p === 'granted') {
-    try { new Notification('Test notification', { body: 'Browser pop-ups are working.', tag: 'ftw-test' }); } catch { /* ignore */ }
-    body += body ? ' A browser pop-up was shown too.' : 'A browser pop-up was shown.';
-  } else body += p === 'denied' ? ' Browser pop-ups are blocked.' : ' Browser pop-ups are off (use the bell button).';
+    try { new Notification('Туршилтын мэдэгдэл', { body: 'Хөтчийн гарч ирэх мэдэгдэл ажиллаж байна.', tag: 'ftw-test' }); } catch { /* ignore */ }
+    body += body ? ' Хөтчийн мэдэгдэл бас гарч ирлээ.' : 'Хөтчийн мэдэгдэл гарч ирлээ.';
+  } else body += p === 'denied' ? ' Хөтчийн мэдэгдэл хориглогдсон.' : ' Хөтчийн мэдэгдэл унтраалттай (хонхны товчоор асаана).';
   body = body.trim();
-  toast({ sev: 'info', title: 'Test notification', body });
+  toast({ sev: 'info', title: 'Туршилтын мэдэгдэл', body });
 }
 
 // ---------------------------------------------------------------- data loading
@@ -654,7 +665,7 @@ async function submitLogin(e) {
   e.preventDefault();
   const pw = $('#login-pw').value;
   const err = $('#login-err');
-  if (!pw) { err.textContent = 'Enter the password.'; return; }
+  if (!pw) { err.textContent = 'Нууц үгээ оруулна уу.'; return; }
   const btn = $('#login-btn');
   btn.disabled = true;
   err.textContent = '';
@@ -664,11 +675,11 @@ async function submitLogin(e) {
     });
     const j = await res.json().catch(() => null);
     if (res.ok && j && j.ok) { location.reload(); return; }
-    err.textContent = res.status === 401 || res.status === 403 ? 'Wrong password.'
-      : res.status === 429 ? 'Too many attempts — wait a minute and try again.'
-      : (j && j.error) || `Sign-in failed (HTTP ${res.status}).`;
+    err.textContent = res.status === 401 || res.status === 403 ? 'Нууц үг буруу байна.'
+      : res.status === 429 ? 'Хэт олон оролдлого — хэсэг хүлээгээд дахин оролдоно уу.'
+      : (j && j.error) || `Нэвтэрч чадсангүй (HTTP ${res.status}).`;
   } catch {
-    err.textContent = 'Cannot reach the server.';
+    err.textContent = 'Сервертэй холбогдож чадахгүй байна.';
   } finally {
     btn.disabled = false;
   }
@@ -798,7 +809,10 @@ function showView(view) {
   if (view === 'fleet') renderFleet();
   if (view === 'map') { renderMap(); setTimeout(() => mapObj?.invalidateSize(), 50); }
   if (view === 'alerts') { syncAlertControls(); if (!S.alerts.loaded || Date.now() - (S.alerts.loadedAt || 0) > 60e3) loadAlerts(); else renderAlerts(); }
-  if (view === 'report') { if (!S.report.rows || Date.now() - S.report.loadedAt > 5 * 60e3) loadReport(); else renderReport(); }
+  if (view === 'report') {
+    if (!S.report.rows || Date.now() - S.report.loadedAt > 5 * 60e3) loadReport(); else renderReport();
+    if (!S.receipts.data || Date.now() - S.receipts.loadedAt > 60e3) loadReceipts(); else renderReceipts();
+  }
   if (view === 'settings') renderSettings();
 }
 
@@ -811,19 +825,19 @@ function populateSelects() {
   for (const id of ['#f-group', '#r-group']) {
     const sel = $(id);
     const cur = sel.value || (id === '#f-group' ? S.fleet.group : '');
-    setHTML(sel, html`<option value="">All groups</option>${gOpts.map(([k, l]) => html`<option value="${k}">${l}</option>`)}`);
+    setHTML(sel, html`<option value="">Бүх бүлэг</option>${gOpts.map(([k, l]) => html`<option value="${k}">${l}</option>`)}`);
     sel.value = gOpts.some(([k]) => k === cur) ? cur : '';
   }
   S.fleet.group = $('#f-group').value;
   const typeSel = $('#a-type');
   const types = Object.entries(S.meta.alertTypes).sort((a, b) => SEVS.indexOf(a[1].severity) - SEVS.indexOf(b[1].severity) || a[1].label.localeCompare(b[1].label));
-  setHTML(typeSel, html`<option value="">All types</option>${types.map(([k, t]) => html`<option value="${k}">${t.label}</option>`)}`);
+  setHTML(typeSel, html`<option value="">Бүх төрөл</option>${types.map(([k, t]) => html`<option value="${k}">${t.label}</option>`)}`);
   const vehSel = $('#a-veh');
   const counts = new Map();
   for (const v of S.vehicles) counts.set(v.shortName, (counts.get(v.shortName) || 0) + 1);
   const dupes = new Set([...counts].filter(([, n]) => n > 1).map(([k]) => k));
   const vs = [...S.vehicles].sort((a, b) => a.shortName.localeCompare(b.shortName, undefined, { numeric: true }));
-  setHTML(vehSel, html`<option value="">All vehicles</option>${vs.map((v) => html`<option value="${v.imei}">${vehicleOptionLabel(v, dupes)}</option>`)}`);
+  setHTML(vehSel, html`<option value="">Бүх машин</option>${vs.map((v) => html`<option value="${v.imei}">${vehicleOptionLabel(v, dupes)}</option>`)}`);
   syncAlertControls();
 }
 
@@ -851,26 +865,29 @@ function fleetFiltered() {
     && (!f.group || groupKey(v.group) === f.group)
     && (!f.status || v.status === f.status)
     && (!f.fuel || v.hasFuel)
-    && (!f.problems || hasProblem(v)));
+    && (!f.problems || hasProblem(v))
+    && (!f.gps || gpsFault(v) !== null));
 }
 function renderFleetTiles() {
-  const c = { moving: 0, idle: 0, parked: 0, offline: 0, fuel: 0, problems: 0, nosig: 0 };
+  const c = { moving: 0, idle: 0, parked: 0, offline: 0, fuel: 0, problems: 0, nosig: 0, gps: 0 };
   for (const v of S.vehicles) {
     c[v.status]++;
     if (v.hasFuel) c.fuel++;
     if (hasProblem(v)) c.problems++;
+    if (gpsFault(v)) c.gps++;
   }
   const f = S.fleet;
   const tile = (key, label, n, cls, pressed, hint) => html`<button type="button" class="tile ${cls}" data-tile="${key}" aria-pressed="${pressed ? 'true' : 'false'}" title="${hint}">
       <span class="t-num">${fmtNum(n)}</span><span class="t-lab">${label}</span></button>`;
   setHTML($('#fleet-tiles'), html`
-    ${tile('all', 'Vehicles', S.vehicles.length, 't-all', !f.status && !f.fuel && !f.problems, 'Show all vehicles')}
-    ${tile('problems', 'Need attention', c.problems, c.problems ? 't-problems hot' : 't-problems', f.problems, 'Vehicles with unacknowledged critical/warning alerts or a faulty fuel sensor')}
-    ${tile('moving', 'Moving', c.moving, 'st-moving', f.status === 'moving', 'Driving now')}
-    ${tile('idle', 'Idle', c.idle, 'st-idle', f.status === 'idle', 'Engine running but not moving')}
-    ${tile('parked', 'Parked', c.parked, 'st-parked', f.status === 'parked', 'Engine off')}
-    ${tile('offline', 'Offline', c.offline, 'st-offline', f.status === 'offline', 'Not reporting')}
-    ${tile('fuel', 'Fuel sensors', c.fuel, 't-fuel', f.fuel, 'Vehicles with a fuel level sensor')}
+    ${tile('all', 'Машин', S.vehicles.length, 't-all', !f.status && !f.fuel && !f.problems && !f.gps, 'Бүх машиныг харуулах')}
+    ${tile('problems', 'Анхаарах', c.problems, c.problems ? 't-problems hot' : 't-problems', f.problems, 'Танилцаагүй ноцтой/сэрэмжлүүлэг анхааруулгатай эсвэл түлшний мэдрэгч нь гэмтэлтэй машин')}
+    ${tile('gps', 'GPS гэмтэл', c.gps, c.gps ? 't-gps hot' : 't-gps', f.gps, 'GPS трекер ажиллахгүй: 6 цаг ба түүнээс удаан мэдээлэлгүй, байршилгүй мэдээлж байгаа, эсвэл машины тэжээлгүйгээр явж байгаа')}
+    ${tile('moving', 'Явж байна', c.moving, 'st-moving', f.status === 'moving', 'Одоо явж байгаа')}
+    ${tile('idle', 'Асаалттай зогссон', c.idle, 'st-idle', f.status === 'idle', 'Хөдөлгүүр ажиллаж байгаа ч хөдлөхгүй')}
+    ${tile('parked', 'Зогсоолд', c.parked, 'st-parked', f.status === 'parked', 'Хөдөлгүүр унтраастай')}
+    ${tile('offline', 'Холбогдоогүй', c.offline, 'st-offline', f.status === 'offline', 'Мэдээлэл ирэхгүй байна')}
+    ${tile('fuel', 'Түлшний мэдрэгчтэй', c.fuel, 't-fuel', f.fuel, 'Түлшний түвшний мэдрэгчтэй машин')}
   `);
 }
 function renderFleet() {
@@ -886,8 +903,8 @@ function renderFleet() {
     body.innerHTML = '';
     empty.hidden = false;
     setHTML(empty, S.vehiclesError
-      ? emptyState('wifi-off', 'Could not load vehicles', S.vehiclesError, { id: 'retry-vehicles', label: 'Try again' })
-      : html`<div class="empty"><span class="spinner"></span><b>Loading vehicles…</b></div>`);
+      ? emptyState('wifi-off', 'Машинуудыг ачаалж чадсангүй', S.vehiclesError, { id: 'retry-vehicles', label: 'Дахин оролдох' })
+      : html`<div class="empty"><span class="spinner"></span><b>Машинуудыг ачаалж байна…</b></div>`);
     $('#f-count').textContent = '';
     return;
   }
@@ -895,23 +912,24 @@ function renderFleet() {
   const list = fleetFiltered();
   const cmp = SORTERS[f.sort] || SORTERS.alerts;
   list.sort((a, b) => cmp(a, b) * f.dir || SORTERS.name(a, b));
-  $('#f-count').textContent = list.length === S.vehicles.length ? `${list.length} vehicles` : `${list.length} of ${S.vehicles.length}`;
+  $('#f-count').textContent = list.length === S.vehicles.length ? `${list.length} машин` : `${S.vehicles.length}-аас ${list.length}`;
   if (!list.length) {
     body.innerHTML = '';
     empty.hidden = false;
-    setHTML(empty, emptyState('search', S.vehicles.length ? 'No vehicles match these filters' : 'No vehicles yet', S.vehicles.length ? 'Try clearing the search or filters.' : 'The program has not received the vehicle list from the GPS server yet.', S.vehicles.length ? { id: 'clear-fleet', label: 'Clear filters' } : null));
+    setHTML(empty, emptyState('search', S.vehicles.length ? 'Шүүлтүүрт тохирох машин алга' : 'Машин алга байна', S.vehicles.length ? 'Хайлт эсвэл шүүлтүүрээ цэвэрлээд үзнэ үү.' : 'Программ GPS серверээс машинуудын жагсаалтыг хараахан аваагүй байна.', S.vehicles.length ? { id: 'clear-fleet', label: 'Шүүлтүүр цэвэрлэх' } : null));
     return;
   }
   empty.hidden = true;
   const t = now();
   setHTML(body, html`${list.map((v) => {
     const sev = topSev(v);
+    const gf = gpsFault(v);
     return html`<tr data-imei="${v.imei}" tabindex="0" class="${sev ? 'sev-' + sev : ''}${v.status === 'offline' ? ' is-off' : ''}">
-      <td class="c-name"><div class="vname">${v.shortName}</div><div class="vsub"><span class="d-only">${[v.plate, v.device].filter(Boolean).join(' · ')}</span><span class="m-only"><span class="st-txt st-${v.status}">${STATUS[v.status].label}</span> · ${relSpan(v.lastSeen)}</span></div></td>
+      <td class="c-name"><div class="vname">${v.shortName}</div><div class="vsub"><span class="d-only">${[v.plate, v.device].filter(Boolean).join(' · ')}</span><span class="m-only"><span class="st-txt st-${v.status}">${STATUS[v.status].label}</span> · ${relSpan(v.lastSeen)}</span></div>${gf ? html`<div class="vsub gps-bad m-only">GPS: ${gf}</div>` : ''}</td>
       <td class="c-group">${groupLabel(v.group)}</td>
-      <td class="c-status">${statusPill(v)}</td>
+      <td class="c-status">${statusPill(v)}${gf ? html`<div class="vsub gps-bad">GPS: ${gf}</div>` : ''}</td>
       <td class="c-fuel">${fuelCell(v)}</td>
-      <td class="c-speed num">${v.status === 'offline' || v.speed === null ? html`<span class="muted">—</span>` : `${fmtNum(v.speed)} km/h`}</td>
+      <td class="c-speed num">${v.status === 'offline' || v.speed === null ? html`<span class="muted">—</span>` : `${fmtNum(v.speed)} км/ц`}</td>
       <td class="c-seen">${relSpan(v.lastSeen)}${v.lastSeen && t - v.lastSeen > 30 * 864e5 ? html`<div class="vsub">${fmtTime(v.lastSeen, t)}</div>` : ''}</td>
       <td class="c-alerts"><span class="badges">${alertBadges(v.activeAlerts, v.muted)}</span></td>
     </tr>`;
@@ -929,7 +947,7 @@ function ensureMap() {
   if (!window.L) {
     const err = $('#map-error');
     err.hidden = false;
-    setHTML(err, emptyState('map', 'The map could not be loaded', 'This needs an internet connection to load the map library and tiles. Everything else works without it.'));
+    setHTML(err, emptyState('map', 'Газрын зургийг ачаалж чадсангүй', 'Газрын зургийг ачаалахад интернэт холболт шаардлагатай. Бусад бүх зүйл интернэтгүй ажиллана.'));
     return false;
   }
   mapObj = L.map('map', { zoomControl: true, worldCopyJump: false }).setView([46.8, 103.8], 5);
@@ -954,10 +972,10 @@ function popupHtml(v) {
   return html`<div class="pop">
     <div class="pop-title">${v.shortName}</div>
     <div class="pop-sub">${groupLabel(v.group)}${v.device ? ' · ' + v.device : ''}</div>
-    <div class="pop-row">${statusPill(v)}${v.status === 'moving' && v.speed !== null ? html`<b>${fmtNum(v.speed)} km/h</b>` : ''}</div>
+    <div class="pop-row">${statusPill(v)}${v.status === 'moving' && v.speed !== null ? html`<b>${fmtNum(v.speed)} км/ц</b>` : ''}</div>
     <div class="pop-row">${fuelCell(v)}</div>
-    <div class="pop-row muted">Last report ${fmtRel(v.lastSeen, now())}</div>
-    <div class="pop-row"><span class="badges">${alertBadges(v.activeAlerts, v.muted)}</span><button type="button" class="btn small primary" data-open="${v.imei}">Details${icon('chevron')}</button></div>
+    <div class="pop-row muted">Сүүлийн мэдээ: ${fmtRel(v.lastSeen, now())}</div>
+    <div class="pop-row"><span class="badges">${alertBadges(v.activeAlerts, v.muted)}</span><button type="button" class="btn small primary" data-open="${v.imei}">Дэлгэрэнгүй${icon('chevron')}</button></div>
   </div>`.s;
 }
 function renderMap() {
@@ -1019,7 +1037,7 @@ function syncAlertControls() {
   if (rangeSel.value !== String(f.range)) { f.range = 72; rangeSel.value = '72'; }
   $('#a-unacked').checked = !!f.unacked;
   const who = f.imei ? vName(f.imei) : null;
-  $('#a-ackall').title = who ? `Mark every open alert of ${who} as seen` : 'Mark every open alert of all vehicles as seen';
+  $('#a-ackall').title = who ? `${who} машины бүх нээлттэй анхааруулгатай танилцсан гэж тэмдэглэх` : 'Бүх машины бүх нээлттэй анхааруулгатай танилцсан гэж тэмдэглэх';
 }
 function saveAlertFilters() { S.alerts.temp = null; savePref('alertFilters', S.alerts.f); }
 /** Show the Alerts view with a shortcut's filter, without replacing the saved filters. */
@@ -1044,18 +1062,32 @@ function renderTempChip() {
   if (!el) return;
   const t = S.alerts.temp;
   el.hidden = !t;
-  if (t) setHTML(el, html`<span>Showing: <b>${t.label}</b></span><button type="button" class="link" data-action="alerts-show-saved">Show my usual filters</button>`);
+  if (t) setHTML(el, html`<span>Харуулж байна: <b>${t.label}</b></span><button type="button" class="link" data-action="alerts-show-saved">Өөрийн шүүлтүүрийг харуулах</button>`);
 }
-async function loadAlerts(append = false) {
-  const st = S.alerts;
-  const f = st.f;
-  if (!f.sev.length) { st.list = []; st.hasMore = false; st.loaded = true; renderAlerts(); return; }
+/** Query parameters for the Alerts view's filter: the list and its Excel download use the same. */
+function alertFilterParams(f) {
   const p = new URLSearchParams();
   if (f.sev.length < SEVS.length) p.set('severity', f.sev.join(','));
   if (f.type) p.set('type', f.type);
   if (f.imei) p.set('imei', f.imei);
   if (f.unacked) p.set('unacked', '1');
   p.set('since', String(Math.round(now() - f.range * HOUR)));
+  return p;
+}
+/** Excel of every alert the filter matches, not only the ones loaded on screen. */
+function downloadAlertsExcel(link) {
+  if (!S.alerts.f.sev.length) {
+    toast({ sev: 'warning', title: 'Дор хаяж нэг зэрэглэл сонгоно уу', body: 'Дээрх Ноцтой / Сэрэмжлүүлэг / Мэдээлэл товчийг ашиглана уу.' });
+    return;
+  }
+  link.setAttribute('href', '/api/export/alerts.xlsx?' + alertFilterParams(S.alerts.f).toString());
+  downloadExcel(link);
+}
+async function loadAlerts(append = false) {
+  const st = S.alerts;
+  const f = st.f;
+  if (!f.sev.length) { st.list = []; st.hasMore = false; st.loaded = true; renderAlerts(); return; }
+  const p = alertFilterParams(f);
   p.set('limit', '200');
   if (append && st.list.length) p.set('until', String(st.list[st.list.length - 1].t));
   if (!append) keepInList.clear(); // a fresh list: reviewed cards follow the filter again
@@ -1085,7 +1117,7 @@ async function loadAlerts(append = false) {
     if (req !== alertsReq) return;
     st.error = e.message;
     markServer(false, e);
-    if (st.list.length) toast({ sev: 'warning', title: 'Could not load alerts', body: e.message });
+    if (st.list.length) toast({ sev: 'warning', title: 'Анхааруулгыг ачаалж чадсангүй', body: e.message });
   } finally {
     if (req === alertsReq) {
       st.loading = false;
@@ -1107,24 +1139,24 @@ function alertItem(a, { compact = false } = {}) {
       <div class="al-top">
         ${compact ? '' : html`<b class="al-veh">${aName(a)}</b>`}
         <span class="al-title">${a.title || ti.label}</span>
-        ${a.ongoing ? html`<span class="tag ongoing">Ongoing</span>` : ''}
+        ${a.ongoing ? html`<span class="tag ongoing">Үргэлжилж байна</span>` : ''}
         ${a.type === 'fuel_drain' && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span>` : ''}
-        ${a.historical ? html`<span class="tag hist" title="Found while catching up on past data — no notification was sent.">History</span>` : ''}
-        ${isNew ? html`<span class="tag new">New</span>` : ''}
+        ${a.historical ? html`<span class="tag hist" title="Өмнөх мэдээллийг нөхөх үед олдсон — мэдэгдэл илгээгээгүй.">Түүх</span>` : ''}
+        ${isNew ? html`<span class="tag new">Шинэ</span>` : ''}
       </div>
       <div class="al-meta">
         <span class="sev-label sev-${sev}">${SEV_LABEL[sev]}</span><span class="sep">·</span><span>${ti.label}</span><span class="sep">·</span>
         <time datetime="${isNum(a.t) ? new Date(a.t).toISOString() : ''}" title="${fmtFull(a.t)}">${fmtTime(a.t, now())}</time>
         <span class="muted">(${isNum(a.t) ? relSpan(a.t) : ''})</span>
-        ${span ? html`<span class="muted">· over ${fmtDur(span)}</span>` : ''}
+        ${span ? html`<span class="muted">· ${fmtDur(span)} хугацаанд</span>` : ''}
       </div>
       ${a.detail ? html`<div class="al-detail">${a.detail}</div>` : ''}
       ${LEDGER_TYPES.includes(a.type) ? reviewControls(a) : ''}
     </div>
     ${amt ? html`<div class="al-amt t-${a.type}"><b>${sign}${amt.main}</b><small>${amt.sub}</small></div>` : html`<div class="al-amt"></div>`}
     <div class="al-act">${a.acked
-      ? html`<span class="acked-mark" title="Acknowledged">${icon('check')}<span>Seen</span></span>`
-      : html`<button type="button" class="btn small js-ack" data-id="${a.id}" title="Mark as seen">${icon('check')}<span class="hide-sm">Acknowledge</span></button>`}</div>
+      ? html`<span class="acked-mark" title="Танилцсан">${icon('check')}<span>Танилцсан</span></span>`
+      : html`<button type="button" class="btn small js-ack" data-id="${a.id}" title="Танилцсан гэж тэмдэглэх">${icon('check')}<span class="hide-sm">Танилцлаа</span></button>`}</div>
   </article>`;
 }
 /** Verdict buttons (fuel drains) and a note field on refuel / fuel drain alerts; both are saved
@@ -1133,15 +1165,15 @@ function reviewControls(a) {
   const drain = a.type === 'fuel_drain';
   const vb = (v, label, title) => html`<button type="button" class="js-verdict v-${v}" data-id="${a.id}" data-v="${v}" aria-pressed="${String(a.verdict === v)}" title="${title}">${label}</button>`;
   return html`<div class="al-review" data-id="${a.id}">
-    ${drain ? html`<div class="seg small verdict-seg" role="group" aria-label="Your verdict">
-      ${vb('confirmed', 'Confirmed theft', 'You checked it: fuel really was stolen or lost')}
-      ${vb('false_alarm', 'False alarm', 'You checked it: no fuel was lost (not counted in the Excel totals)')}
-      ${a.verdict !== 'unchecked' ? vb('unchecked', 'Reset', 'Back to unchecked') : ''}
+    ${drain ? html`<div class="seg small verdict-seg" role="group" aria-label="Таны дүгнэлт">
+      ${vb('confirmed', 'Хулгай батлагдсан', 'Та шалгасан: түлш үнэхээр хулгайлагдсан эсвэл алдагдсан')}
+      ${vb('false_alarm', 'Худал дохио', 'Та шалгасан: түлш алдагдаагүй (Excel-ийн нийлбэрт тооцохгүй)')}
+      ${a.verdict !== 'unchecked' ? vb('unchecked', 'Буцаах', 'Шалгаагүй болгох') : ''}
     </div>` : ''}
-    <label class="al-note-wrap"><span class="sr-only">Note</span>
-      <input type="text" class="al-note js-note" data-id="${a.id}" data-saved="${a.note}" value="${a.note}" maxlength="${NOTE_MAX}" placeholder="${drain ? 'Add a note (who, what was found…)' : 'Add a note (station, receipt…)'}" autocomplete="off" spellcheck="true" title="Saved when you press Enter or leave the box; goes into the Excel file">
+    <label class="al-note-wrap"><span class="sr-only">Тэмдэглэл</span>
+      <input type="text" class="al-note js-note" data-id="${a.id}" data-saved="${a.note}" value="${a.note}" maxlength="${NOTE_MAX}" placeholder="${drain ? 'Тэмдэглэл нэмэх (хэн, юу олдсон…)' : 'Тэмдэглэл нэмэх (станц, баримт…)'}" autocomplete="off" spellcheck="false" title="Enter дарах эсвэл нүднээс гарахад хадгалагдана; Excel файлд орно">
     </label>
-    ${(recentSaves.get(String(a.id)) || 0) > Date.now() - 2500 ? html`<span class="note-state ok" aria-live="polite">Saved</span>` : html`<span class="note-state" aria-live="polite"></span>`}
+    ${(recentSaves.get(String(a.id)) || 0) > Date.now() - 2500 ? html`<span class="note-state ok" aria-live="polite">Хадгалсан</span>` : html`<span class="note-state" aria-live="polite"></span>`}
   </div>`;
 }
 const recentSaves = new Map(); // alert id -> time its review was saved (the "Saved" hint survives re-renders)
@@ -1170,21 +1202,21 @@ function keepNoteDrafts(container, render) {
   }
 }
 async function saveReview(id, body, stateEl) {
-  if (stateEl) { stateEl.textContent = 'Saving…'; stateEl.className = 'note-state'; }
+  if (stateEl) { stateEl.textContent = 'Хадгалж байна…'; stateEl.className = 'note-state'; }
   keepInList.add(String(id)); // before the request: the SSE update can arrive before its answer
   try {
     const a = await api(`/api/alerts/${encodeURIComponent(id)}/review`, { method: 'PUT', body });
     recentSaves.set(String(id), Date.now());
     if (a && a.id !== undefined) onAlert(a);
-    for (const st of $$(`.al-review[data-id="${CSS.escape(String(id))}"] .note-state`)) { st.textContent = 'Saved'; st.className = 'note-state ok'; }
+    for (const st of $$(`.al-review[data-id="${CSS.escape(String(id))}"] .note-state`)) { st.textContent = 'Хадгалсан'; st.className = 'note-state ok'; }
     setTimeout(() => {
       recentSaves.delete(String(id));
       for (const st of $$(`.al-review[data-id="${CSS.escape(String(id))}"] .note-state.ok`)) st.textContent = '';
     }, 2600);
     return true;
   } catch (e) {
-    if (stateEl?.isConnected) { stateEl.textContent = 'Not saved'; stateEl.className = 'note-state err'; }
-    toast({ sev: 'warning', title: 'Could not save', body: e.message });
+    if (stateEl?.isConnected) { stateEl.textContent = 'Хадгалагдаагүй'; stateEl.className = 'note-state err'; }
+    toast({ sev: 'warning', title: 'Хадгалж чадсангүй', body: e.message });
     return false;
   }
 }
@@ -1214,11 +1246,11 @@ function renderAlertsNow() {
   const st = S.alerts;
   renderTempChip();
   $('#a-more').hidden = !st.hasMore;
-  if (!st.f.sev.length) { setHTML(el, emptyState('info', 'Choose at least one severity', 'Use the Critical / Warning / Info buttons above.')); return; }
+  if (!st.f.sev.length) { setHTML(el, emptyState('info', 'Дор хаяж нэг зэрэглэл сонгоно уу', 'Дээрх Ноцтой / Сэрэмжлүүлэг / Мэдээлэл товчийг ашиглана уу.')); return; }
   if (!st.list.length) {
-    if (st.loading || !st.loaded) setHTML(el, html`<div class="empty"><span class="spinner"></span><b>Loading alerts…</b></div>`);
-    else if (st.error) setHTML(el, emptyState('wifi-off', 'Could not load alerts', st.error, { id: 'retry-alerts', label: 'Try again' }));
-    else setHTML(el, emptyState('check', 'All quiet', st.f.unacked ? 'No unacknowledged alerts match these filters.' : 'No alerts match these filters in this period.'));
+    if (st.loading || !st.loaded) setHTML(el, html`<div class="empty"><span class="spinner"></span><b>Анхааруулгыг ачаалж байна…</b></div>`);
+    else if (st.error) setHTML(el, emptyState('wifi-off', 'Анхааруулгыг ачаалж чадсангүй', st.error, { id: 'retry-alerts', label: 'Дахин оролдох' }));
+    else setHTML(el, emptyState('check', 'Бүх зүйл хэвийн', st.f.unacked ? 'Шүүлтүүрт тохирох танилцаагүй анхааруулга алга.' : 'Энэ хугацаанд шүүлтүүрт тохирох анхааруулга алга.'));
     return;
   }
   const groups = [];
@@ -1230,7 +1262,7 @@ function renderAlertsNow() {
     cur.items.push(a);
   }
   setHTML(el, html`${groups.map((g) => html`<section class="day">
-      <h3 class="day-h">${isNum(g.t) ? fmtDayHeading(g.t, t) : 'Unknown date'} <span class="muted">${g.items.length} alert${g.items.length === 1 ? '' : 's'}</span></h3>
+      <h3 class="day-h">${isNum(g.t) ? fmtDayHeading(g.t, t) : 'Огноо тодорхойгүй'} <span class="muted">${g.items.length} анхааруулга</span></h3>
       <div class="day-items">${g.items.map((a) => alertItem(a))}</div>
     </section>`)}`);
 }
@@ -1240,7 +1272,7 @@ async function ackAlert(id, btn) {
     await api(`/api/alerts/${encodeURIComponent(id)}/ack`, { method: 'POST', body: {} });
   } catch (e) {
     if (btn) btn.disabled = false;
-    toast({ sev: 'warning', title: 'Could not acknowledge', body: e.message });
+    toast({ sev: 'warning', title: 'Танилцсан гэж тэмдэглэж чадсангүй', body: e.message });
     return;
   }
   const mark = (list) => { const a = list?.find((x) => String(x.id) === String(id)); if (a) a.acked = true; };
@@ -1252,13 +1284,13 @@ async function ackAlert(id, btn) {
 }
 async function ackAll() {
   const f = S.alerts.f;
-  const who = f.imei ? vName(f.imei) : 'all vehicles';
-  if (!window.confirm(`Mark every unacknowledged alert of ${who} as seen?\n\nThis includes all types and dates, not only the ones listed.`)) return;
+  const who = f.imei ? vName(f.imei) : 'бүх машин';
+  if (!window.confirm(`${who}: танилцаагүй бүх анхааруулгатай танилцсан гэж тэмдэглэх үү?\n\nЖагсаалтад харагдаж байгаа нь бус, бүх төрөл, бүх огноог хамарна.`)) return;
   try {
     await api('/api/alerts/ack-all', { method: 'POST', body: f.imei ? { imei: f.imei } : {} });
-    toast({ sev: 'good', title: 'All alerts acknowledged', body: f.imei ? who : '' });
+    toast({ sev: 'good', title: 'Бүх анхааруулгатай танилцлаа', body: f.imei ? who : '' });
   } catch (e) {
-    toast({ sev: 'warning', title: 'Could not acknowledge', body: e.message });
+    toast({ sev: 'warning', title: 'Танилцсан гэж тэмдэглэж чадсангүй', body: e.message });
     return;
   }
   loadAlerts();
@@ -1350,15 +1382,15 @@ const R_SORT = {
 };
 function amountCell(mv, L, pct, cls = '', prefix = '') {
   if (!isNum(mv) && !isNum(L)) return html`<span class="muted">—</span>`;
-  if (isNum(L)) return html`<b class="${cls}">${prefix}${fmtNum(L)} L</b><small>${isNum(pct) ? `${fmtNum(pct, 1)}%` : ''}</small>`;
-  return html`<b class="${cls}">${prefix}${fmtNum(pct, 1)}%</b><small>${fmtNum(mv)} mV</small>`;
+  if (isNum(L)) return html`<b class="${cls}">${prefix}${fmtNum(L)} л</b><small>${isNum(pct) ? `${fmtNum(pct, 1)}%` : ''}</small>`;
+  return html`<b class="${cls}">${prefix}${fmtNum(pct, 1)}%</b><small>${fmtNum(mv)} мВ</small>`;
 }
 /** Fuel used: incomplete when the steady parked readings cover only part of the distance. */
 function usedCell(x) {
-  if (!x.hasFuel) return html`<span class="muted">no sensor</span>`;
-  if (x.noUse) return html`<span class="muted" title="Not enough steady parked readings to measure the fuel used over this distance">—</span>`;
+  if (!x.hasFuel) return html`<span class="muted">мэдрэгчгүй</span>`;
+  if (x.noUse) return html`<span class="muted" title="Энэ зайд зарцуулсан түлшийг хэмжих хангалттай тогтвортой зогсоолын заалт алга">—</span>`;
   const cell = amountCell(x.usedMv, x.usedL, x.usedPct, '', x.partial ? '≥ ' : '');
-  return x.partial ? html`<span title="Covers ${fmtNum(x.fuelKm ?? 0)} of ${fmtNum(x.distanceKm)} km (between the first and last steady parked reading)">${cell}</span>` : cell;
+  return x.partial ? html`<span title="${fmtNum(x.distanceKm)} км-ээс ${fmtNum(x.fuelKm ?? 0)} км-ийг хамарна (эхний ба сүүлийн тогтвортой зогсоолын заалтын хооронд)">${cell}</span>` : cell;
 }
 /** Report view: where the Excel fuel ledger is saved and whether it is up to date. */
 function renderExcelBar() {
@@ -1366,21 +1398,21 @@ function renderExcelBar() {
   if (!el) return;
   const x = S.status?.excel;
   $('#r-excel-folder').hidden = !(S.features.openFolder && x && x.enabled && x.file);
-  if (!S.features.excelFile) { setHTML(el, html`Made from the latest data when you click <b>Download Excel</b>.`); return; }
-  if (!x) { setHTML(el, html`<span class="muted">Status unknown.</span>`); return; }
+  if (!S.features.excelFile) { setHTML(el, html`<b>Excel татах</b> дарахад хамгийн сүүлийн мэдээллээр бэлтгэнэ.`); return; }
+  if (!x) { setHTML(el, html`<span class="muted">Төлөв тодорхойгүй.</span>`); return; }
   const ev = x.events;
-  const counts = ev ? html` · ${fmtNum(ev.refuels)} refuel${ev.refuels === 1 ? '' : 's'}, ${fmtNum(ev.thefts)} suspected theft${ev.thefts === 1 ? '' : 's'}` : '';
+  const counts = ev ? html` · ${fmtNum(ev.refuels)} цэнэглэлт, ${fmtNum(ev.thefts)} хулгайн сэжиг` : '';
   if (!x.enabled) {
-    setHTML(el, html`Not saved to a file automatically (<code>excelFile</code> is empty in config.json) — use <b>Download Excel</b>.`);
+    setHTML(el, html`Файлд автоматаар хадгалахгүй (config.json-д <code>excelFile</code> хоосон) — <b>Excel татах</b> ашиглана уу.`);
     return;
   }
   const where = html`<span class="excel-path" title="${x.file}">${x.file}</span>`;
-  const written = isNum(x.lastWrittenAt) ? html`updated ${relSpan(toMs(x.lastWrittenAt))}` : html`not written yet`;
+  const written = isNum(x.lastWrittenAt) ? html`шинэчилсэн: ${relSpan(toMs(x.lastWrittenAt))}` : html`хараахан бичээгүй`;
   let warn = '';
-  if (x.locked) warn = html`<div class="excel-warn">${icon('triangle')} The file is open in Excel — it will be updated when you close it${isNum(x.nextRetryAt) ? ' (tried again every minute)' : ''}.</div>`;
-  else if (x.lastError) warn = html`<div class="excel-warn">${icon('triangle')} Not saved: ${x.lastError} — ${x.blocked ? 'tried again when something changes' : 'retrying every minute'}.</div>`;
-  else if (x.pending) warn = html`<div class="muted">${S.status?.backfill?.running ? 'New changes will be written once the history has loaded.' : 'New changes are being saved…'}</div>`;
-  setHTML(el, html`${isNum(x.lastWrittenAt) ? 'Saved automatically to' : 'Will be saved automatically to'} ${where} · ${written}${counts}${warn}`);
+  if (x.locked) warn = html`<div class="excel-warn">${icon('triangle')} Файл Excel-д нээлттэй байна — хаасны дараа шинэчлэгдэнэ${isNum(x.nextRetryAt) ? ' (минут тутам дахин оролдоно)' : ''}.</div>`;
+  else if (x.lastError) warn = html`<div class="excel-warn">${icon('triangle')} Хадгалагдаагүй: ${x.lastError} — ${x.blocked ? 'өөрчлөлт гарахад дахин оролдоно' : 'минут тутам дахин оролдож байна'}.</div>`;
+  else if (x.pending) warn = html`<div class="muted">${S.status?.backfill?.running ? 'Түүх ачаалагдсаны дараа шинэ өөрчлөлтийг бичнэ.' : 'Шинэ өөрчлөлтийг хадгалж байна…'}</div>`;
+  setHTML(el, html`${isNum(x.lastWrittenAt) ? 'Автоматаар хадгалдаг:' : 'Автоматаар хадгалах газар:'} ${where} · ${written}${counts}${warn}`);
 }
 /** Download the workbook (built on the fly); errors show as a message instead of a broken file. */
 async function downloadExcel(link) {
@@ -1392,17 +1424,17 @@ async function downloadExcel(link) {
     try {
       res = await fetch(link.getAttribute('href'), { cache: 'no-store' });
     } catch {
-      throw new Error('Cannot reach the server');
+      throw new Error('Сервертэй холбогдож чадахгүй байна');
     }
-    if (res.status === 401 && S.mode === 'cloud') { showLogin(); throw new Error('Please sign in again.'); }
+    if (res.status === 401 && S.mode === 'cloud') { showLogin(); throw new Error('Дахин нэвтэрнэ үү.'); }
     if (!res.ok) {
-      let msg = `Server error (HTTP ${res.status})`;
+      let msg = `Серверийн алдаа (HTTP ${res.status})`;
       try { const j = await res.json(); if (j && j.error) msg = j.error; } catch { /* not JSON */ }
       throw new Error(msg);
     }
     const blob = await res.blob();
     const cd = res.headers.get('content-disposition') || '';
-    let name = 'Fuel events.xlsx';
+    let name = 'Түлшний бүртгэл.xlsx';
     const m = /filename\*=UTF-8''([^;]+)/i.exec(cd) || /filename="([^"]+)"/i.exec(cd);
     if (m) { try { name = decodeURIComponent(m[1]); } catch { name = m[1]; } }
     const url = URL.createObjectURL(blob);
@@ -1414,19 +1446,122 @@ async function downloadExcel(link) {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   } catch (e) {
-    toast({ sev: 'warning', title: 'Could not create the Excel file', body: e.message });
+    toast({ sev: 'warning', title: 'Excel файл үүсгэж чадсангүй', body: e.message });
   } finally {
     link.classList.remove('busy');
     link.removeAttribute('aria-busy');
+  }
+}
+// ---------------------------------------------------------------- fuel receipts check (Report)
+const RC_STATUS = {
+  short: { label: 'Түлш дутуу', cls: 'sev-critical' },
+  norefuel: { label: 'Цэнэглэлт бүртгэгдээгүй', cls: 'sev-warning' },
+  ok: { label: 'Таарсан', cls: 'rc-ok' },
+  waiting: { label: 'Мэдээлэл хүлээж байна', cls: '' },
+  nodata: { label: 'Тэр үед мэдээлэлгүй', cls: '' },
+  nosensor: { label: 'Түлшний мэдрэгчгүй', cls: '' },
+};
+const rcProblem = (r) => r.status === 'short' || r.status === 'norefuel';
+const rcLocalMs = (r) => Date.parse(`${r.date}T${r.time || '12:00'}:00Z`) - (S.meta.tzOffsetMinutes ?? 480) * 60e3;
+async function loadReceipts() {
+  const rc = S.receipts;
+  rc.loading = true;
+  renderReceipts();
+  try {
+    rc.data = await api('/api/receipts');
+    rc.error = null;
+    rc.loadedAt = Date.now();
+  } catch (e) {
+    rc.error = e.message;
+  } finally {
+    rc.loading = false;
+    renderReceipts();
+  }
+}
+function renderReceipts() {
+  const rc = S.receipts;
+  const d = rc.data;
+  $$('#r-rc-filter button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.f === rc.filter)));
+  const status = $('#r-rc-status');
+  const listEl = $('#r-rc-list');
+  if (!d) {
+    status.textContent = rc.error ? `Баримтуудыг ачаалж чадсангүй: ${rc.error}` : 'Ачаалж байна…';
+    listEl.innerHTML = '';
+    return;
+  }
+  const t = d.totals;
+  if (!t.receipts) {
+    setHTML(status, html`Баримт алга байна. <b>Баримт нэмэх</b> товчоор Excel-ээс хуулж оруулна уу — савд орсноос их литрийн баримт (дор хаяж ${d.missingMinL} л эсвэл ${d.missingMinPct}% дутуу) “Баримт зөрсөн” анхааруулга үүсгэнэ.`);
+    listEl.innerHTML = '';
+    return;
+  }
+  const bad = t.short + t.norefuel;
+  setHTML(status, html`${fmtNum(t.receipts)} баримт, ${fmtNum(t.litres)} л ·
+    ${bad ? html`<b class="rc-bad">${fmtNum(bad)} баримтад түлш дутуу — ${fmtNum(t.missing)} л</b>` : html`<span class="rc-good">бүгд цэнэглэлттэй таарч байна</span>`}
+    ${t.nofit ? html` · ${fmtNum(t.nofit)} нь савны сул зайнаас их` : ''}${t.waiting ? ` · ${t.waiting} мэдээлэл хүлээж байна` : ''}${t.nodata ? ` · ${t.nodata} нь программын мэдээллээс өмнөх` : ''}`);
+  const rows = rc.filter === 'all' ? d.receipts : d.receipts.filter(rcProblem);
+  if (!rows.length) {
+    setHTML(listEl, html`<p class="help rc-empty">Асуудалтай баримт алга. ${icon('check')}</p>`);
+    return;
+  }
+  const L = (x) => (isNum(x) ? `${fmtNum(x)} л` : '—');
+  setHTML(listEl, html`<div class="table-scroll"><table class="tbl rc-tbl"><thead><tr>
+      <th>Огноо</th><th>Машин</th><th class="num">Баримт</th><th class="num">Савд орсон</th><th class="num">Дутуу</th><th>Үр дүн</th><th class="rc-x"><span class="sr-only">Устгах</span></th>
+    </tr></thead><tbody>${rows.slice(0, 300).map((r) => {
+      const st = RC_STATUS[r.status] || { label: r.status, cls: '' };
+      const miss = r.status === 'short' ? r.missing : r.status === 'norefuel' ? r.litres : null;
+      const at = r.refuel ? r.refuel.fromT : rcLocalMs(r);
+      const why = r.refuel ? `Цэнэглэлт ${fmtFull(r.refuel.fromT)}: ${L(r.refuel.before)} → ${L(r.refuel.after)}${isNum(r.room) ? `; савны сул зай ${L(r.room)}` : ''}` : '';
+      return html`<tr data-imei="${r.imei}" data-at="${Math.round(at)}" tabindex="0" title="${why || 'Машиныг нээх'}">
+        <td>${r.date}${r.dateTo ? '…' + r.dateTo.slice(5) : ''}${r.time ? html` <span class="muted">${r.time}</span>` : ''}</td>
+        <td><b>${r.vehicle}</b></td>
+        <td class="num">${L(r.litres)}</td>
+        <td class="num">${r.refuel ? L(r.refuel.wentIn) : html`<span class="muted">—</span>`}</td>
+        <td class="num">${miss !== null ? html`<b class="rc-bad">${L(miss)}</b>` : html`<span class="muted">—</span>`}</td>
+        <td><span class="chip ${st.cls}">${st.label}</span>${r.nofit ? html` <span class="chip sev-critical" title="Баримт нь цэнэглэхийн өмнөх савны сул зайнаас их">савд багтахгүй</span>` : ''}</td>
+        <td class="rc-x"><button type="button" class="btn small js-rc-del" data-id="${r.id}" title="Энэ баримтыг устгах" aria-label="Энэ баримтыг устгах">${icon('x')}</button></td>
+      </tr>`;
+    })}</tbody></table></div>${rows.length > 300 ? html`<p class="help">${rows.length}-аас 300-г харуулж байна. Excel түлшний бүртгэлийн “Баримт” хуудсанд бүгд бий.</p>` : ''}`);
+}
+async function importReceipts(btn) {
+  const text = $('#r-rc-text').value;
+  const msg = $('#r-rc-msg');
+  if (!text.trim()) { msg.textContent = 'Эхлээд Excel-ээс мөрүүдийг хуулж оруулна уу.'; return; }
+  btn.disabled = true;
+  msg.textContent = 'Шалгаж байна…';
+  try {
+    const r = await api('/api/receipts', { method: 'POST', body: { text }, timeout: 60000 });
+    S.receipts.data = r;
+    S.receipts.loadedAt = Date.now();
+    const skipped = r.skipped || [];
+    const unknown = skipped.filter((s) => s.reason === 'unknown vehicle').length;
+    setHTML(msg, html`<b>${r.added} нэмэгдсэн</b>${r.duplicates ? `, ${r.duplicates} аль хэдийн байсан` : ''}${skipped.length ? html`, <span class="rc-bad">${skipped.length} уншигдаагүй</span> <span class="muted">(${unknown ? `${unknown} мөрийн машин олдсонгүй` : ''}${unknown && skipped.length > unknown ? ', ' : ''}${skipped.length > unknown ? `${skipped.length - unknown} мөрөнд огноо эсвэл литр алга` : ''}; жишээ нь ${skipped[0].line}-р мөр: “${skipped[0].text.replace(/\t/g, '  ')}”)</span>` : ''}.`);
+    if (r.added) $('#r-rc-text').value = '';
+    renderReceipts();
+    if (r.added) { loadVehicles(); S.alerts.loadedAt = 0; }
+  } catch (e) {
+    msg.textContent = `Баримтуудыг шалгаж чадсангүй: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function deleteReceipt(id) {
+  if (!confirm('Энэ баримтыг устгах уу?')) return;
+  try {
+    S.receipts.data = await api(`/api/receipts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    S.receipts.loadedAt = Date.now();
+    renderReceipts();
+  } catch (e) {
+    toast({ sev: 'warning', title: 'Баримтыг устгаж чадсангүй', body: e.message });
   }
 }
 async function openExcelFolder(btn) {
   btn.disabled = true;
   try {
     await api('/api/excel/open-folder', { method: 'POST', body: {} });
-    toast({ sev: 'good', title: 'Folder opened', body: 'Look for the Explorer window on this computer.', timeout: 4000 });
+    toast({ sev: 'good', title: 'Хавтас нээгдлээ', body: 'Энэ компьютер дээрх Explorer цонхыг харна уу.', timeout: 4000 });
   } catch (e) {
-    toast({ sev: 'warning', title: 'Could not open the folder', body: e.message });
+    toast({ sev: 'warning', title: 'Хавтсыг нээж чадсангүй', body: e.message });
   } finally {
     btn.disabled = false;
   }
@@ -1445,7 +1580,7 @@ function renderReport() {
     body.innerHTML = '';
     tiles.innerHTML = '';
     empty.hidden = false;
-    setHTML(empty, r.error ? emptyState('wifi-off', 'Could not load the report', r.error, { id: 'retry-report', label: 'Try again' }) : html`<div class="empty"><span class="spinner"></span><b>Preparing report…</b></div>`);
+    setHTML(empty, r.error ? emptyState('wifi-off', 'Тайланг ачаалж чадсангүй', r.error, { id: 'retry-report', label: 'Дахин оролдох' }) : html`<div class="empty"><span class="spinner"></span><b>Тайлан бэлтгэж байна…</b></div>`);
     return;
   }
   const rows = reportFiltered();
@@ -1463,22 +1598,22 @@ function renderReport() {
     crit += x.crit;
     if ((x.distanceKm || 0) > 1) active++;
   }
-  const veh = (n) => `${n} vehicle${n === 1 ? '' : 's'}`;
+  const veh = (n) => `${n} машин`;
   const tile = (label, value, sub, cls = '') => html`<div class="tile static ${cls}"><span class="t-num">${value}</span><span class="t-lab">${label}</span>${sub ? html`<span class="t-sub">${sub}</span>` : ''}</div>`;
   setHTML(tiles, html`
-    ${tile('Distance driven', `${fmtNum(dist)} km`, `${active} vehicle${active === 1 ? '' : 's'} moved`)}
-    ${tile('Engine hours', fmtNum(eng, 1), '')}
-    ${tile('Fuel used', usedLn ? `${fmtNum(usedL)} L` : '—', usedLn || usedPartial
-      ? `${veh(usedLn)}${usedPartial ? ` — ${usedPartial} more with an incomplete figure not counted` : ''}`
-      : 'Set tank sizes in Settings to see litres')}
-    ${tile('Refuels', !refuelN ? '0' : refuelLn === refuelN ? `${fmtNum(refuelL)} L` : veh(refuelN), !refuelN ? '' : refuelLn === refuelN ? veh(refuelN) : refuelLn ? `${fmtNum(refuelL)} L known (tank size missing for ${refuelN - refuelLn})` : 'set tank sizes to see litres')}
-    ${tile('Suspected fuel loss', !drainN ? 'None' : drainLn === drainN ? `${fmtNum(drainL)} L` : veh(drainN), !drainN ? 'no drain alerts (false alarms and cancelled drains not counted)' : drainLn === drainN ? `${veh(drainN)} — false alarms and cancelled drains not counted` : drainLn ? `${fmtNum(drainL)} L known — check the alerts` : 'check the alerts', drainN ? 'hot' : 'calm')}
-    ${tile('Critical alerts', fmtNum(crit), '', crit ? 'hot' : 'calm')}
+    ${tile('Туулсан зам', `${fmtNum(dist)} км`, `${active} машин хөдөлсөн`)}
+    ${tile('Хөдөлгүүрийн цаг', fmtNum(eng, 1), '')}
+    ${tile('Зарцуулсан түлш', usedLn ? `${fmtNum(usedL)} л` : '—', usedLn || usedPartial
+      ? `${veh(usedLn)}${usedPartial ? ` — дутуу дүнтэй өөр ${usedPartial} машиныг тооцоогүй` : ''}`
+      : 'Литрээр харахын тулд Тохиргоонд савны хэмжээг оруулна уу')}
+    ${tile('Цэнэглэлт', !refuelN ? '0' : refuelLn === refuelN ? `${fmtNum(refuelL)} л` : veh(refuelN), !refuelN ? '' : refuelLn === refuelN ? veh(refuelN) : refuelLn ? `${fmtNum(refuelL)} л мэдэгдэж байна (${refuelN - refuelLn} машины савны хэмжээ алга)` : 'литрээр харахын тулд савны хэмжээг оруулна уу')}
+    ${tile('Сэжигтэй түлшний алдагдал', !drainN ? 'Алга' : drainLn === drainN ? `${fmtNum(drainL)} л` : veh(drainN), !drainN ? 'алдагдлын анхааруулга алга (худал дохио, цуцлагдсан алдагдлыг тооцохгүй)' : drainLn === drainN ? `${veh(drainN)} — худал дохио, цуцлагдсан алдагдлыг тооцохгүй` : drainLn ? `${fmtNum(drainL)} л мэдэгдэж байна — анхааруулгыг шалгана уу` : 'анхааруулгыг шалгана уу', drainN ? 'hot' : 'calm')}
+    ${tile('Ноцтой анхааруулга', fmtNum(crit), '', crit ? 'hot' : 'calm')}
   `);
   if (!rows.length) {
     body.innerHTML = '';
     empty.hidden = false;
-    setHTML(empty, emptyState('search', 'No vehicles match', 'Try clearing the search or the group filter.'));
+    setHTML(empty, emptyState('search', 'Тохирох машин алга', 'Хайлт эсвэл бүлгийн шүүлтүүрээ цэвэрлээд үзнэ үү.'));
     return;
   }
   empty.hidden = true;
@@ -1489,10 +1624,10 @@ function renderReport() {
     return html`<tr data-imei="${x.imei}" tabindex="0">
       <td class="c-name"><div class="vname">${x.shortName}</div><div class="vsub m-only">${groupLabel(x.group)}</div></td>
       <td class="c-group">${groupLabel(x.group)}</td>
-      <td class="num">${isNum(x.distanceKm) ? `${fmtNum(x.distanceKm)} km` : '—'}</td>
-      <td class="num c-eng">${isNum(x.engineHours) ? `${fmtNum(x.engineHours, 1)} h` : '—'}</td>
+      <td class="num">${isNum(x.distanceKm) ? `${fmtNum(x.distanceKm)} км` : '—'}</td>
+      <td class="num c-eng">${isNum(x.engineHours) ? `${fmtNum(x.engineHours, 1)} ц` : '—'}</td>
       <td class="num amt">${usedCell(x)}</td>
-      <td class="num c-rate">${x.rate !== null ? `${fmtNum(x.rate, 1)} L` : html`<span class="muted">—</span>`}</td>
+      <td class="num c-rate">${x.rate !== null ? `${fmtNum(x.rate, 1)} л` : html`<span class="muted">—</span>`}</td>
       <td class="num amt c-refuel">${x.refuelMv > 0 ? amountCell(x.refuelMv, x.refuelL, x.refuelPct, 'good') : html`<span class="muted">—</span>`}</td>
       <td class="num amt">${x.drainMv > 0 ? amountCell(x.drainMv, x.drainL, x.drainPct, 'bad') : html`<span class="muted">—</span>`}</td>
       <td class="c-ralerts">${chips.length ? chips.slice(0, 4).map(([t, c]) => html`<span class="chip sev-${typeInfo(t).severity}" title="${typeLabel(t)}">${icon(TYPE_ICON[t] || SEV_ICON[typeInfo(t).severity])}${c}</span>`) : html`<span class="muted">—</span>`}${chips.length > 4 ? html`<span class="chip">+${chips.length - 4}</span>` : ''}</td>
@@ -1507,24 +1642,24 @@ function exportCsv() {
   rows.sort((a, b) => cmp(a, b) * r.dir || R_SORT.name(a, b));
   const types = Object.keys(S.meta.alertTypes);
   const f = (v, d = 1) => (isNum(v) ? Number(v).toFixed(d) : '');
-  const head = ['Vehicle', 'Full name', 'IMEI', 'Group', 'Fuel sensor', 'Distance (km)', 'Engine hours', 'Fuel used (L)', 'Fuel used (% of tank)', 'Fuel used (mV)',
-    'Litres per 100 km', 'Fuel figure covers (km)', 'Fuel figure complete', 'Refuelled (L)', 'Refuelled (mV)', 'Suspected loss (L)', 'Suspected loss (mV)', ...types.map((t) => `${typeLabel(t)} (count)`)];
+  const head = ['Машин', 'Бүтэн нэр', 'IMEI', 'Бүлэг', 'Түлшний мэдрэгч', 'Туулсан зам (км)', 'Хөдөлгүүрийн цаг', 'Зарцуулсан түлш (л)', 'Зарцуулсан түлш (савны %)', 'Зарцуулсан түлш (мВ)',
+    '100 км-т литр', 'Түлшний дүн хамарсан зам (км)', 'Түлшний дүн бүрэн эсэх', 'Цэнэглэсэн (л)', 'Цэнэглэсэн (мВ)', 'Сэжигтэй алдагдал (л)', 'Сэжигтэй алдагдал (мВ)', ...types.map((t) => `${typeLabel(t)} (тоо)`)];
   const lines = [head.map(csvCell).join(',')];
   for (const x of rows) {
-    lines.push([x.shortName, x.name, x.imei, groupLabel(x.group), x.hasFuel ? 'yes' : 'no', f(x.distanceKm), f(x.engineHours, 2), f(x.usedL), f(x.usedPct), f(x.usedMv, 0),
-      f(x.rate), f(x.fuelKm), x.usedMv === null ? '' : x.noUse ? 'no' : x.partial ? 'partial' : 'yes',
+    lines.push([x.shortName, x.name, x.imei, groupLabel(x.group), x.hasFuel ? 'тийм' : 'үгүй', f(x.distanceKm), f(x.engineHours, 2), f(x.usedL), f(x.usedPct), f(x.usedMv, 0),
+      f(x.rate), f(x.fuelKm), x.usedMv === null ? '' : x.noUse ? 'үгүй' : x.partial ? 'хэсэгчлэн' : 'тийм',
       f(x.refuelL), f(x.refuelMv, 0), f(x.drainL), f(x.drainMv, 0), ...types.map((t) => x.counts[t] || 0)].map(csvCell).join(','));
   }
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
-  downloadText(`fuel-report-${r.hours === 24 ? '24h' : '7days'}-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.csv`, '﻿' + lines.join('\r\n'));
+  downloadText(`түлшний-тайлан-${r.hours === 24 ? '24ц' : `${Math.round(r.hours / 24)}хоног`}-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.csv`, '﻿' + lines.join('\r\n'));
 }
 
 // ---------------------------------------------------------------- SETTINGS view
 function renderSettings() {
   if (!S.settings) {
-    setHTML($('#s-rules-fields'), html`<div class="empty"><span class="spinner"></span><b>Loading settings…</b></div>`);
-    loadSettings().then(() => { if (S.settings && S.view === 'settings') renderSettings(); else if (!S.settings) setHTML($('#s-rules-fields'), emptyState('wifi-off', 'Could not load settings', 'Check that the program is running.', { id: 'retry-settings', label: 'Try again' })); });
+    setHTML($('#s-rules-fields'), html`<div class="empty"><span class="spinner"></span><b>Тохиргоог ачаалж байна…</b></div>`);
+    loadSettings().then(() => { if (S.settings && S.view === 'settings') renderSettings(); else if (!S.settings) setHTML($('#s-rules-fields'), emptyState('wifi-off', 'Тохиргоог ачаалж чадсангүй', 'Программ ажиллаж байгаа эсэхийг шалгана уу.', { id: 'retry-settings', label: 'Дахин оролдох' })); });
     renderBrowserCard();
     return;
   }
@@ -1542,8 +1677,8 @@ function ruleEq(k, val, cal) {
   const litres = (c) => (Number(val) / Math.abs(c.fullMv - c.emptyMv)) * c.tankLiters;
   if (cal) {
     const c = normCal(cal);
-    if (c.tankLiters) return `≈ ${fmtNum(litres(c))} L${per} on this ${fmtNum(c.tankLiters)} L tank`;
-    return `≈ ${fmtNum(dMvToPct(Number(val), c), 1)}% of the tank${per}`;
+    if (c.tankLiters) return `≈ ${fmtNum(litres(c))} л${per} (энэ ${fmtNum(c.tankLiters)} л-ийн савд)`;
+    return `≈ савны ${fmtNum(dMvToPct(Number(val), c), 1)}%${per}`;
   }
   const types = new Map();
   for (const v of S.vehicles) {
@@ -1554,8 +1689,8 @@ function ruleEq(k, val, cal) {
     types.set(key, t);
   }
   const list = [...types.values()].sort((a, b) => b.n - a.n).slice(0, 3).sort((a, b) => a.cal.tankLiters - b.cal.tankLiters);
-  if (!list.length) return `≈ ${fmtNum(Number(val) / 100, 1)}% of the sensor range${per}`;
-  return `≈ ${list.map((t) => `${fmtNum(litres(t.cal))} L${per} on ${fmtNum(t.cal.tankLiters)} L tanks`).join(', ')}`;
+  if (!list.length) return `≈ мэдрэгчийн хүрээний ${fmtNum(Number(val) / 100, 1)}%${per}`;
+  return `≈ ${list.map((t) => `${fmtNum(litres(t.cal))} л${per} (${fmtNum(t.cal.tankLiters)} л-ийн савд)`).join(', ')}`;
 }
 function renderRulesForm() {
   const th = S.settings.thresholds || {};
@@ -1585,10 +1720,10 @@ function renderBrowserCard() {
   if (!perm) return;
   const p = notifSupported() ? Notification.permission : 'unsupported';
   perm.textContent = {
-    granted: 'On — you will get a pop-up when an alert arrives while this tab is in the background.',
-    default: 'Off — click Enable and allow notifications when the browser asks.',
-    denied: 'Blocked — allow notifications for this site in the browser settings (lock icon in the address bar).',
-    unsupported: 'Not available on this address. Open the dashboard on the server computer at http://localhost:8080.',
+    granted: 'Асаалттай — энэ цонх ард байхад анхааруулга ирвэл гарч ирэх мэдэгдэл авна.',
+    default: 'Унтраалттай — Асаах дараад хөтөч асуухад мэдэгдлийг зөвшөөрнө үү.',
+    denied: 'Хориглогдсон — хөтчийн тохиргооноос (хаягийн мөрөн дэх цоожны дүрс) энэ сайтад мэдэгдлийг зөвшөөрнө үү.',
+    unsupported: 'Энэ хаяг дээр боломжгүй. Самбарыг сервер компьютер дээр http://localhost:8080 хаягаар нээнэ үү.',
   }[p];
   const btn = $('#s-perm-btn');
   btn.hidden = p === 'granted' || p === 'unsupported';
@@ -1600,7 +1735,7 @@ function renderBrowserCard() {
     const sevs = serverPopupSevs();
     note.hidden = !sevs.length;
     note.textContent = sevs.length
-      ? `Windows pop-ups from the program are on for ${sevs.map((x) => SEV_LABEL[x].toLowerCase()).join(' and ')} alerts, so the browser does not pop those up again (it still shows them inside this page).`
+      ? `Программын Windows мэдэгдэл ${sevs.map((x) => SEV_LABEL[x].toLowerCase()).join(' ба ')} анхааруулгад асаалттай тул хөтөч тэдгээрийг дахин гаргахгүй (энэ хуудас дотор харуулсаар байна).`
       : '';
   }
 }
@@ -1613,7 +1748,7 @@ function renderCalTable() {
   const list = S.vehicles.filter((v) => (all || v.hasFuel) && (!q || v._search.includes(q)))
     .sort((a, b) => (b.hasFuel - a.hasFuel) || a.shortName.localeCompare(b.shortName, undefined, { numeric: true }));
   if (!list.length) {
-    setHTML(tbody, html`<tr><td colspan="8">${S.vehiclesLoaded ? emptyState('search', 'No vehicles match', '') : html`<div class="empty"><span class="spinner"></span><b>Loading…</b></div>`}</td></tr>`);
+    setHTML(tbody, html`<tr><td colspan="8">${S.vehiclesLoaded ? emptyState('search', 'Тохирох машин алга', '') : html`<div class="empty"><span class="spinner"></span><b>Ачаалж байна…</b></div>`}</td></tr>`);
     return;
   }
   setHTML(tbody, html`${list.map((v) => {
@@ -1622,24 +1757,24 @@ function renderCalTable() {
     const nOver = Object.values(vs.th || {}).filter((x) => x !== null && x !== undefined && x !== '').length;
     const dis = v.hasFuel ? '' : raw('disabled');
     return html`<tr data-imei="${v.imei}">
-      <td><div class="vname">${v.shortName}</div><div class="vsub">${groupLabel(v.group)}${v.hasFuel && v.cal.source === 'gps-server' ? html` · <span title="Litres come from the tank table set up on the GPS server. Enter your own values to override it.">tank table</span>` : ''}</div></td>
-      <td class="num">${v.hasFuel ? (v.fuel && isNum(v.fuel.mv) ? `${fmtNum(v.fuel.mv)} mV` : html`<span class="muted">—</span>`) : html`<span class="muted">no sensor</span>`}</td>
-      <td class="num"><input type="number" name="emptyMv" min="0" max="20000" step="1" value="${cal.emptyMv}" ${dis} aria-label="Empty reading, ${v.shortName}"></td>
-      <td class="num"><input type="number" name="fullMv" min="0" max="20000" step="1" value="${cal.fullMv}" ${dis} aria-label="Full reading, ${v.shortName}"></td>
-      <td class="num"><input type="number" name="tankLiters" min="1" max="10000" step="1" value="${cal.tankLiters ?? ''}" placeholder="—" ${dis} aria-label="Tank size in litres, ${v.shortName}"></td>
-      <td><label class="switch sm"><input type="checkbox" name="muted" ${v.muted ? raw('checked') : ''}><span class="sr-only">Mute ${v.shortName}</span></label></td>
-      <td>${nOver ? html`<button type="button" class="link js-open" data-imei="${v.imei}">${nOver} custom</button>` : html`<button type="button" class="link subtle js-open" data-imei="${v.imei}">none</button>`}</td>
-      <td><button type="button" class="btn small primary js-save" disabled>Save</button></td>
+      <td><div class="vname">${v.shortName}</div><div class="vsub">${groupLabel(v.group)}${v.hasFuel && v.cal.source === 'gps-server' ? html` · <span title="Литрийг GPS сервер дээр тохируулсан савны хүснэгтээс авч байна. Өөрчлөхийг хүсвэл өөрийн утгаа оруулна уу.">савны хүснэгт</span>` : ''}</div></td>
+      <td class="num">${v.hasFuel ? (v.fuel && isNum(v.fuel.mv) ? `${fmtNum(v.fuel.mv)} мВ` : html`<span class="muted">—</span>`) : html`<span class="muted">мэдрэгчгүй</span>`}</td>
+      <td class="num"><input type="number" name="emptyMv" min="0" max="20000" step="1" value="${cal.emptyMv}" ${dis} aria-label="Хоосон үеийн заалт, ${v.shortName}"></td>
+      <td class="num"><input type="number" name="fullMv" min="0" max="20000" step="1" value="${cal.fullMv}" ${dis} aria-label="Дүүрэн үеийн заалт, ${v.shortName}"></td>
+      <td class="num"><input type="number" name="tankLiters" min="1" max="10000" step="1" value="${cal.tankLiters ?? ''}" placeholder="—" ${dis} aria-label="Савны хэмжээ литрээр, ${v.shortName}"></td>
+      <td><label class="switch sm"><input type="checkbox" name="muted" ${v.muted ? raw('checked') : ''}><span class="sr-only">${v.shortName} мэдэгдэл хаах</span></label></td>
+      <td>${nOver ? html`<button type="button" class="link js-open" data-imei="${v.imei}">${nOver} өөрийн</button>` : html`<button type="button" class="link subtle js-open" data-imei="${v.imei}">алга</button>`}</td>
+      <td><button type="button" class="btn small primary js-save" disabled>Хадгалах</button></td>
     </tr>`;
   })}`);
 }
 function readCal(get) {
   const e = get('emptyMv'), f = get('fullMv'), t = get('tankLiters');
   const cal = { emptyMv: Number(e), fullMv: Number(f), tankLiters: t === '' || t === null || t === undefined ? null : Number(t) };
-  if (!isNum(e) || !isNum(f)) return { error: 'Enter numbers for the empty and full readings.' };
-  if (Math.abs(cal.fullMv - cal.emptyMv) < 100) return { error: 'Full and empty readings must differ by at least 100 mV.' };
-  if (cal.emptyMv < 0 || cal.fullMv < 0 || cal.emptyMv > 20000 || cal.fullMv > 20000) return { error: 'Readings must be between 0 and 20 000 mV.' };
-  if (cal.tankLiters !== null && !(cal.tankLiters > 0 && cal.tankLiters <= 10000)) return { error: 'Tank size must be between 1 and 10 000 litres (or empty).' };
+  if (!isNum(e) || !isNum(f)) return { error: 'Хоосон ба дүүрэн үеийн заалтад тоо оруулна уу.' };
+  if (Math.abs(cal.fullMv - cal.emptyMv) < 100) return { error: 'Дүүрэн ба хоосон заалт дор хаяж 100 мВ-оор ялгаатай байх ёстой.' };
+  if (cal.emptyMv < 0 || cal.fullMv < 0 || cal.emptyMv > 20000 || cal.fullMv > 20000) return { error: 'Заалт 0-ээс 20 000 мВ-ийн хооронд байх ёстой.' };
+  if (cal.tankLiters !== null && !(cal.tankLiters > 0 && cal.tankLiters <= 10000)) return { error: 'Савны хэмжээ 1-ээс 10 000 литрийн хооронд байх ёстой (эсвэл хоосон).' };
   return { cal };
 }
 async function saveVehicleSettings(imei, body) {
@@ -1675,10 +1810,12 @@ function hoursFor(at) {
   const age = now() - at;
   if (age <= 20 * HOUR) return 24;
   if (age <= 44 * HOUR) return 48;
-  return 168;
+  if (age <= 6.5 * 24 * HOUR) return 168;
+  if (age <= 29 * 24 * HOUR) return 720;
+  return 1440;
 }
-const focusSpan = (hours) => (hours <= 24 ? 6 * HOUR : hours <= 48 ? 10 * HOUR : 36 * HOUR);
-const HISTORY_KEPT_H = 168; // the server keeps detailed samples this long
+const focusSpan = (hours) => (hours <= 24 ? 6 * HOUR : hours <= 48 ? 10 * HOUR : hours <= 168 ? 36 * HOUR : 72 * HOUR);
+const HISTORY_KEPT_H = 1464; // the server keeps detailed samples this long (61 days, keepHours)
 const beyondHistory = (at) => isNum(at) && at < now() - HISTORY_KEPT_H * HOUR;
 /** Opened from an alert older than the detailed history: show that alert's card and a note
  *  instead of zooming the chart into an empty window. */
@@ -1719,7 +1856,7 @@ function showDrawer(imei, at) {
   renderDetailHead();
   renderDetailStats();
   renderDetailForm();
-  setHTML($('#d-alerts'), html`<div class="empty small"><span class="spinner"></span>Loading…</div>`);
+  setHTML($('#d-alerts'), html`<div class="empty small"><span class="spinner"></span>Ачаалж байна…</div>`);
   $('#d-levels').innerHTML = '';
   $('#d-zoomreset').hidden = true;
   S.detail.chart = new FuelChart($('#d-chart'), {
@@ -1758,9 +1895,9 @@ function renderDetailHead() {
   const d = S.detail;
   if (!d) return;
   const v = S.byImei.get(d.imei);
-  $('#d-title').textContent = v ? v.shortName : S.vehiclesLoaded ? 'Unknown vehicle' : 'Loading…';
+  $('#d-title').textContent = v ? v.shortName : S.vehiclesLoaded ? 'Тодорхойгүй машин' : 'Ачаалж байна…';
   setHTML($('#d-sub'), v
-    ? html`${statusPill(v)}<span>${groupLabel(v.group)}</span>${v.device ? html`<span class="sep">·</span><span>${v.device}</span>` : ''}<span class="sep">·</span><span class="mono">IMEI ${v.imei}</span>${v.muted ? html`<span class="tag">${icon('mute')}Muted</span>` : ''}${v.name && v.name.trim() !== v.shortName ? html`<div class="d-fullname">${v.name}</div>` : ''}`
+    ? html`${statusPill(v)}<span>${groupLabel(v.group)}</span>${v.device ? html`<span class="sep">·</span><span>${v.device}</span>` : ''}<span class="sep">·</span><span class="mono">IMEI ${v.imei}</span>${v.muted ? html`<span class="tag">${icon('mute')}Мэдэгдэл хаасан</span>` : ''}${v.name && v.name.trim() !== v.shortName ? html`<div class="d-fullname">${v.name}</div>` : ''}`
     : html`<span class="mono">IMEI ${d.imei}</span>`);
 }
 function renderDetailStats() {
@@ -1768,41 +1905,41 @@ function renderDetailStats() {
   if (!d) return;
   const v = S.byImei.get(d.imei);
   const el = $('#d-stats');
-  if (!v) { setHTML(el, S.vehiclesLoaded ? emptyState('search', 'Vehicle not found', 'It may have been removed from the GPS account.') : html`<div class="empty small"><span class="spinner"></span>Loading…</div>`); return; }
+  if (!v) { setHTML(el, S.vehiclesLoaded ? emptyState('search', 'Машин олдсонгүй', 'GPS бүртгэлээс хасагдсан байж болзошгүй.') : html`<div class="empty small"><span class="spinner"></span>Ачаалж байна…</div>`); return; }
   const f = v.fuel;
   const th = thFor(v.imei);
   let fuelBlock;
   const fs = v.hasFuel ? fuelState(v) : null;
-  if (!v.hasFuel) fuelBlock = html`<div class="big-fuel none"><span class="bf-num">—</span><span class="bf-sub">This vehicle has no fuel sensor.</span></div>`;
-  else if (fs === 'fault') fuelBlock = html`<div class="big-fuel nosig"><span class="bf-num">No signal</span><span class="bf-sub">The fuel sensor is not giving valid readings (disconnected, stuck or faulty), so no level is shown — its readings are not reliable.</span></div>`;
-  else if (fs === 'offline') fuelBlock = html`<div class="big-fuel wait"><span class="bf-num">No data</span><span class="bf-sub">${v.lastSeen ? `Offline since ${fmtFull(v.lastSeen)}.` : 'This vehicle has not reported.'} The level is measured again once it reports while parked.</span></div>`;
-  else if (fs === 'wait') fuelBlock = html`<div class="big-fuel wait"><span class="bf-num">Waiting…</span><span class="bf-sub">The level is measured when the vehicle stands still. No steady reading yet.</span></div>`;
+  if (!v.hasFuel) fuelBlock = html`<div class="big-fuel none"><span class="bf-num">—</span><span class="bf-sub">Энэ машин түлшний мэдрэгчгүй.</span></div>`;
+  else if (fs === 'fault') fuelBlock = html`<div class="big-fuel nosig"><span class="bf-num">Дохиогүй</span><span class="bf-sub">Түлшний мэдрэгч хүчинтэй заалт өгөхгүй байна (салсан, гацсан эсвэл эвдэрсэн) тул түвшинг харуулахгүй — заалт нь найдваргүй.</span></div>`;
+  else if (fs === 'offline') fuelBlock = html`<div class="big-fuel wait"><span class="bf-num">Мэдээлэл алга</span><span class="bf-sub">${v.lastSeen ? `${fmtFull(v.lastSeen)}-с хойш холбогдоогүй.` : 'Энэ машин мэдээлэл илгээгээгүй.'} Зогсоолд байхдаа дахин мэдээлэхэд түвшинг хэмжинэ.</span></div>`;
+  else if (fs === 'wait') fuelBlock = html`<div class="big-fuel wait"><span class="bf-num">Хүлээж байна…</span><span class="bf-sub">Түвшинг машин зогсож байхад хэмждэг. Тогтвортой заалт хараахан алга.</span></div>`;
   else {
     const p = clamp(fuelPct(v), 0, 100);
     const L = fuelLitres(v);
     const low = Number(th.lowFuelPct ?? 10);
     fuelBlock = html`<div class="big-fuel ${p <= low ? 'low' : p <= 25 ? 'mid' : ''}">
-      <div class="bf-top"><span class="bf-num">${fmtNum(p)}%</span>${L !== null ? html`<span class="bf-l">${fmtNum(L)} L${v.cal.tankLiters ? ` of ${fmtNum(v.cal.tankLiters)}` : ''}</span>` : ''}</div>
+      <div class="bf-top"><span class="bf-num">${fmtNum(p)}%</span>${L !== null ? html`<span class="bf-l">${fmtNum(L)} л${v.cal.tankLiters ? ` / ${fmtNum(v.cal.tankLiters)}` : ''}</span>` : ''}</div>
       <span class="gbar big"><i style="width:${p.toFixed(1)}%"></i></span>
-      <span class="bf-sub">${fmtNum(f.mv)} mV · measured ${f.trustedAt ? relSpan(f.trustedAt) : 'recently'} while parked</span></div>`;
+      <span class="bf-sub">${fmtNum(f.mv)} мВ · зогсоолд хэмжсэн: ${f.trustedAt ? relSpan(f.trustedAt) : 'саяхан'}</span></div>`;
   }
   const pwr = v.pwrMv;
   const pcut = Number(th.powerCutMv ?? 5000);
   const off = v.status === 'offline';
   // engine state follows the status (charging voltage / movement); the ignition wire alone
   // reads "on" permanently on many trackers
-  const engine = off ? '—' : v.status === 'moving' || v.status === 'idle' ? 'On' : 'Off';
-  const engineNote = off ? (v.ign === 1 ? 'last known: ignition on' : v.ign === 0 ? 'last known: off' : '')
-    : engine === 'Off' && v.ign === 1 ? 'ignition wire reads on' : '';
-  const pwrTxt = isNum(pwr) ? `${fmtNum(pwr / 1000, 1)} V` : '—';
+  const engine = off ? '—' : v.status === 'moving' || v.status === 'idle' ? 'Асаалттай' : 'Унтраастай';
+  const engineNote = off ? (v.ign === 1 ? 'сүүлд: гал асаалттай' : v.ign === 0 ? 'сүүлд: унтраастай' : '')
+    : engine === 'Унтраастай' && v.ign === 1 ? 'галын утас асаалттай заана' : '';
+  const pwrTxt = isNum(pwr) ? `${fmtNum(pwr / 1000, 1)} В` : '—';
   setHTML(el, html`
-    <div class="stat fuel-stat"><span class="k">${icon('fuel')}Fuel in tank</span>${fuelBlock}</div>
-    <div class="stat"><span class="k">Status</span><span class="v">${statusPill(v)}</span><small>${v.status === 'offline' ? STATUS.offline.long : statusLong(v)}</small></div>
-    <div class="stat"><span class="k">Speed</span><span class="v">${v.status === 'offline' || v.speed === null ? '—' : `${fmtNum(v.speed)} km/h`}</span></div>
-    <div class="stat"><span class="k">Engine</span><span class="v">${engine}</span><small>${engineNote}</small></div>
-    <div class="stat"><span class="k">Tracker power</span><span class="v">${off ? '—' : pwrTxt}</span><small>${off ? (isNum(pwr) ? `last known ${pwrTxt}` : '') : isNum(pwr) && pwr < pcut ? 'off — battery switch?' : ''}</small></div>
-    <div class="stat"><span class="k">Last report</span><span class="v">${relSpan(v.lastSeen)}</span><small>${v.lastSeen ? fmtFull(v.lastSeen) : ''}</small></div>
-    <div class="stat"><span class="k">Open alerts</span><span class="v badges">${alertBadges(v.activeAlerts, v.muted)}${!v.activeAlerts.critical && !v.activeAlerts.warning ? html`<span class="none-txt">None</span>` : ''}</span>${(v.activeAlerts.critical || v.activeAlerts.warning) ? html`<button type="button" class="link small" data-action="ack-vehicle">Acknowledge all</button>` : ''}</div>
+    <div class="stat fuel-stat"><span class="k">${icon('fuel')}Саван дахь түлш</span>${fuelBlock}</div>
+    <div class="stat"><span class="k">Төлөв</span><span class="v">${statusPill(v)}</span><small>${v.status === 'offline' ? STATUS.offline.long : statusLong(v)}</small></div>
+    <div class="stat"><span class="k">Хурд</span><span class="v">${v.status === 'offline' || v.speed === null ? '—' : `${fmtNum(v.speed)} км/ц`}</span></div>
+    <div class="stat"><span class="k">Хөдөлгүүр</span><span class="v">${engine}</span><small>${engineNote}</small></div>
+    <div class="stat"><span class="k">Трекерийн тэжээл</span><span class="v">${off ? '—' : pwrTxt}</span><small>${off ? (isNum(pwr) ? `сүүлд ${pwrTxt}` : '') : isNum(pwr) && pwr < pcut ? 'унтраастай — масс таслуур?' : ''}</small></div>
+    <div class="stat"><span class="k">Сүүлийн мэдээ</span><span class="v">${relSpan(v.lastSeen)}</span><small>${v.lastSeen ? fmtFull(v.lastSeen) : ''}</small></div>
+    <div class="stat"><span class="k">Нээлттэй анхааруулга</span><span class="v badges">${alertBadges(v.activeAlerts, v.muted)}${!v.activeAlerts.critical && !v.activeAlerts.warning ? html`<span class="none-txt">Алга</span>` : ''}</span>${(v.activeAlerts.critical || v.activeAlerts.warning) ? html`<button type="button" class="link small" data-action="ack-vehicle">Бүгдтэй танилцах</button>` : ''}</div>
   `);
 }
 async function loadDetail(keepView = false) {
@@ -1838,8 +1975,8 @@ async function loadDetail(keepView = false) {
   } catch (e) {
     if (S.detail !== d || req !== d.req) return;
     d.error = e.message;
-    if (!d.data) setHTML($('#d-alerts'), emptyState('wifi-off', 'Could not load history', e.message, { id: 'retry-detail', label: 'Try again' }));
-    toast({ sev: 'warning', title: 'Could not load vehicle history', body: e.message });
+    if (!d.data) setHTML($('#d-alerts'), emptyState('wifi-off', 'Түүхийг ачаалж чадсангүй', e.message, { id: 'retry-detail', label: 'Дахин оролдох' }));
+    toast({ sev: 'warning', title: 'Машины түүхийг ачаалж чадсангүй', body: e.message });
   } finally {
     if (S.detail === d && req === d.req) host.classList.remove('loading');
   }
@@ -1857,9 +1994,9 @@ function renderDetailAlerts() {
   const list = d.data.alerts;
   const el = $('#d-alerts');
   const old = d.oldAlert;
-  const oldBlock = old ? html`<div class="old-alert"><p class="help">${icon('info')} Detailed history is kept for 7 days; this alert is from ${fmtFull(old.t)}, so the chart shows the last 7 days instead.</p>${old.alert ? alertItem(old.alert, { compact: true }) : ''}</div>` : '';
-  if (!list.length) { keepNoteDrafts(el, () => setHTML(el, html`${oldBlock}${emptyState('check', 'No alerts', `Nothing unusual in the last ${d.hours === 168 ? '7 days' : d.hours + ' hours'}.`)}`)); return; }
-  keepNoteDrafts(el, () => setHTML(el, html`${oldBlock}${list.slice(0, 100).map((a) => alertItem(a, { compact: true }))}${list.length > 100 ? html`<p class="muted small">Showing the latest 100 of ${list.length}.</p>` : ''}`));
+  const oldBlock = old ? html`<div class="old-alert"><p class="help">${icon('info')} Дэлгэрэнгүй түүхийг 61 хоног хадгалдаг; энэ анхааруулга ${fmtFull(old.t)}-нийх тул график сүүлийн 60 хоногийг харуулж байна.</p>${old.alert ? alertItem(old.alert, { compact: true }) : ''}</div>` : '';
+  if (!list.length) { keepNoteDrafts(el, () => setHTML(el, html`${oldBlock}${emptyState('check', 'Анхааруулга алга', `Сүүлийн ${d.hours === 1440 ? '60 хоногт' : d.hours === 720 ? '30 хоногт' : d.hours === 168 ? '7 хоногт' : d.hours + ' цагт'} онцгой зүйл гараагүй.`)}`)); return; }
+  keepNoteDrafts(el, () => setHTML(el, html`${oldBlock}${list.slice(0, 100).map((a) => alertItem(a, { compact: true }))}${list.length > 100 ? html`<p class="muted small">${list.length}-аас сүүлийн 100-г харуулж байна.</p>` : ''}`));
 }
 /** Zoom the detail chart around an alert moment (covering the whole anomaly when it has a start). */
 function focusChartOn(t, id) {
@@ -1890,17 +2027,17 @@ function renderLevelsTable() {
   if (!d || !d.data) return;
   const cal = calFor(d.imei);
   const lv = d.data.levels.filter((l) => Array.isArray(l) && isNum(l[0]) && isNum(l[1])).slice().sort((a, b) => b[0] - a[0]);
-  if (!lv.length) { setHTML($('#d-levels'), html`<p class="muted small">No trusted readings in this period.</p>`); return; }
+  if (!lv.length) { setHTML($('#d-levels'), html`<p class="muted small">Энэ хугацаанд найдвартай заалт алга.</p>`); return; }
   const fault = S.byImei.get(d.imei)?.fuel?.sensorOk === false;
-  setHTML($('#d-levels'), html`${fault ? html`<p class="help warn-text">The fuel sensor is faulty — these readings are not reliable.</p>` : ''}<table class="tbl mini${fault ? ' fault' : ''}"><thead><tr><th>Time</th><th class="num">Level</th>${cal.tankLiters ? html`<th class="num">Litres</th>` : ''}<th class="num">Sensor (mV)</th></tr></thead><tbody>
-    ${lv.slice(0, 400).map(([t, mv]) => html`<tr><td>${fmtFull(t)}</td><td class="num">${fmtNum(mvToPct(mv, cal), 1)}%</td>${cal.tankLiters ? html`<td class="num">${fmtNum((mvToPct(mv, cal) / 100) * cal.tankLiters)} L</td>` : ''}<td class="num">${fmtNum(mv)}</td></tr>`)}
+  setHTML($('#d-levels'), html`${fault ? html`<p class="help warn-text">Түлшний мэдрэгч гэмтэлтэй — эдгээр заалт найдваргүй.</p>` : ''}<table class="tbl mini${fault ? ' fault' : ''}"><thead><tr><th>Цаг</th><th class="num">Түвшин</th>${cal.tankLiters ? html`<th class="num">Литр</th>` : ''}<th class="num">Мэдрэгч (мВ)</th></tr></thead><tbody>
+    ${lv.slice(0, 400).map(([t, mv]) => html`<tr><td>${fmtFull(t)}</td><td class="num">${fmtNum(mvToPct(mv, cal), 1)}%</td>${cal.tankLiters ? html`<td class="num">${fmtNum((mvToPct(mv, cal) / 100) * cal.tankLiters)} л</td>` : ''}<td class="num">${fmtNum(mv)}</td></tr>`)}
   </tbody></table>`);
 }
 function initDetailMap() {
   const d = S.detail;
   const el = $('#d-map');
   if (!d) return;
-  if (!window.L) { el.classList.add('no-map'); el.textContent = 'Map unavailable (no internet connection to load the map).'; return; }
+  if (!window.L) { el.classList.add('no-map'); el.textContent = 'Газрын зураг байхгүй (газрын зургийг ачаалах интернэт холболт алга).'; return; }
   d.map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true }).setView([46.8, 103.8], 5);
   L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }).addTo(d.map);
   d.alertLayer = L.layerGroup().addTo(d.map);
@@ -1915,8 +2052,8 @@ function updateDetailMap() {
   const v = S.byImei.get(d.imei);
   const foot = $('#d-map-foot');
   if (v && validLatLng(v)) {
-    setHTML(foot, html`${icon('pin')}<span class="mono">${v.lat.toFixed(5)}, ${v.lng.toFixed(5)}</span><a class="link" href="https://www.openstreetmap.org/?mlat=${v.lat}&mlon=${v.lng}#map=14/${v.lat}/${v.lng}" target="_blank" rel="noopener noreferrer">Open larger map</a>`);
-  } else setHTML(foot, html`<span class="muted">No position reported yet.</span>`);
+    setHTML(foot, html`${icon('pin')}<span class="mono">${v.lat.toFixed(5)}, ${v.lng.toFixed(5)}</span><a class="link" href="https://www.openstreetmap.org/?mlat=${v.lat}&mlon=${v.lng}#map=14/${v.lat}/${v.lng}" target="_blank" rel="noopener noreferrer">Том газрын зураг нээх</a>`);
+  } else setHTML(foot, html`<span class="muted">Байршил хараахан ирээгүй.</span>`);
   if (!d.map || !v || !validLatLng(v)) return;
   if (!d.marker) d.marker = L.marker([v.lat, v.lng], { icon: markerIcon(v), keyboard: false, zIndexOffset: 1000 }).addTo(d.map);
   else { d.marker.setLatLng([v.lat, v.lng]); d.marker.setIcon(markerIcon(v)); }
@@ -1951,21 +2088,21 @@ function renderDetailForm() {
   const nOver = OVERRIDE_KEYS.filter((k) => isNum(th[k])).length;
   const muted = v ? v.muted : !!vs.muted;
   setHTML(form, html`
-    <h3>Settings for this vehicle</h3>
+    <h3>Энэ машины тохиргоо</h3>
     <div class="form-grid3">
-      <label class="field"><span>Empty reading (mV)</span><input type="number" name="emptyMv" min="0" max="20000" step="1" value="${cal.emptyMv}"></label>
-      <label class="field"><span>Full reading (mV)</span><input type="number" name="fullMv" min="0" max="20000" step="1" value="${cal.fullMv}"></label>
-      <label class="field"><span>Tank size (litres)</span><input type="number" name="tankLiters" min="1" max="10000" step="1" value="${cal.tankLiters ?? ''}" placeholder="unknown"></label>
+      <label class="field"><span>Хоосон үеийн заалт (мВ)</span><input type="number" name="emptyMv" min="0" max="20000" step="1" value="${cal.emptyMv}"></label>
+      <label class="field"><span>Дүүрэн үеийн заалт (мВ)</span><input type="number" name="fullMv" min="0" max="20000" step="1" value="${cal.fullMv}"></label>
+      <label class="field"><span>Савны хэмжээ (литр)</span><input type="number" name="tankLiters" min="1" max="10000" step="1" value="${cal.tankLiters ?? ''}" placeholder="тодорхойгүй"></label>
     </div>
-    <p class="help">${v?.fuel && isNum(v.fuel.mv) ? `Latest settled reading: ${fmtNum(v.fuel.mv)} mV. ` : ''}${v?.fuel && isNum(v.fuel.rawMv) ? `Sensor right now: ${fmtNum(v.fuel.rawMv)} mV${v.status === 'moving' ? ' (moving, unreliable)' : ''}. ` : ''}${cal.source === 'gps-server' ? 'Litres currently come from the tank table set up on the GPS server; change these boxes only to override it. ' : ''}To calibrate, note the settled reading with an almost empty tank, and again right after filling it up. With the tank size set, amounts are shown in litres.${cal.source === 'user' ? html` <button type="button" class="link" data-action="reset-cal">Use the default calibration</button>` : ''}</p>
-    <label class="switch"><input type="checkbox" name="muted" ${muted ? raw('checked') : ''}><span>Mute notifications for this vehicle</span></label>
-    <p class="help">Alerts are still recorded and listed, but no pop-ups, sounds or Windows messages are sent.</p>
+    <p class="help">${v?.fuel && isNum(v.fuel.mv) ? `Сүүлийн тогтворжсон заалт: ${fmtNum(v.fuel.mv)} мВ. ` : ''}${v?.fuel && isNum(v.fuel.rawMv) ? `Мэдрэгч яг одоо: ${fmtNum(v.fuel.rawMv)} мВ${v.status === 'moving' ? ' (явж байгаа, найдваргүй)' : ''}. ` : ''}${cal.source === 'gps-server' ? 'Литрийг одоо GPS сервер дээр тохируулсан савны хүснэгтээс авч байна; үүнийг өөрчлөх бол л эдгээр нүдийг засна уу. ' : ''}Тохируулахдаа сав бараг хоосон үеийн тогтворжсон заалтыг, дараа нь дүүргэсний дараах заалтыг тэмдэглэнэ. Савны хэмжээг оруулбал хэмжээг литрээр харуулна.${cal.source === 'user' ? html` <button type="button" class="link" data-action="reset-cal">Анхны тохируулгыг ашиглах</button>` : ''}</p>
+    <label class="switch"><input type="checkbox" name="muted" ${muted ? raw('checked') : ''}><span>Энэ машины мэдэгдлийг хаах</span></label>
+    <p class="help">Анхааруулга бүртгэгдэж жагсаалтад харагдсаар байх боловч гарч ирэх мэдэгдэл, дуу, Windows мэдэгдэл илгээхгүй.</p>
     <details class="overrides" ${nOver ? raw('open') : ''}>
-      <summary>Own alert rules for this vehicle ${nOver ? html`<span class="tag">${nOver} set</span>` : html`<span class="muted">(using fleet-wide rules)</span>`}</summary>
-      <p class="help">Leave a box empty to use the fleet-wide value shown in grey.</p>
+      <summary>Энэ машины өөрийн анхааруулгын дүрэм ${nOver ? html`<span class="tag">${nOver} тохируулсан</span>` : html`<span class="muted">(нийтийн дүрмийг ашиглаж байна)</span>`}</summary>
+      <p class="help">Саарал өнгөөр харагдах нийтийн утгыг ашиглах бол нүдийг хоосон үлдээнэ үү.</p>
       <div class="form-grid3">${OVERRIDE_KEYS.map((k) => html`<label class="field"><span>${RULE_BY_KEY[k].label} <small>${RULE_BY_KEY[k].unit}</small></span><input type="number" name="th_${k}" inputmode="decimal" min="0" step="any" value="${isNum(th[k]) ? th[k] : ''}" placeholder="${isNum(g[k]) ? String(g[k]) : ''}">${RULE_BY_KEY[k].eq ? html`<output class="eq small" data-veq="${k}">${ruleEq(k, isNum(th[k]) ? th[k] : g[k], cal)}</output>` : ''}</label>`)}</div>
     </details>
-    <div class="form-actions"><button type="submit" class="btn primary">Save vehicle settings</button><span class="save-state" role="status"></span></div>
+    <div class="form-actions"><button type="submit" class="btn primary">Машины тохиргоог хадгалах</button><span class="save-state" role="status"></span></div>
   `);
 }
 async function saveDetailForm(e) {
@@ -1981,25 +2118,25 @@ async function saveDetailForm(e) {
   for (const k of OVERRIDE_KEYS) {
     const val = fd.get('th_' + k);
     if (val !== null && val !== '') {
-      if (!isNum(val) || Number(val) < 0) { state.textContent = `“${RULE_BY_KEY[k].label}” must be a positive number.`; state.className = 'save-state err'; return; }
+      if (!isNum(val) || Number(val) < 0) { state.textContent = `“${RULE_BY_KEY[k].label}” эерэг тоо байх ёстой.`; state.className = 'save-state err'; return; }
       th[k] = Number(val);
     } else th[k] = null; // null = remove this vehicle's own value, use the fleet-wide rule
   }
   const body = { cal, th, muted: fd.get('muted') === 'on' };
   const btn = form.querySelector('button[type=submit]');
   btn.disabled = true;
-  state.textContent = 'Saving…';
+  state.textContent = 'Хадгалж байна…';
   state.className = 'save-state';
   try {
     await saveVehicleSettings(d.imei, body);
     if (S.detail !== d) return;
-    state.textContent = 'Saved';
+    state.textContent = 'Хадгалсан';
     state.className = 'save-state ok';
     const n = Object.values(th).filter((x) => x !== null).length;
     const sum = form.querySelector('.overrides summary');
-    if (sum) setHTML(sum, html`Own alert rules for this vehicle ${n ? html`<span class="tag">${n} set</span>` : html`<span class="muted">(using fleet-wide rules)</span>`}`);
+    if (sum) setHTML(sum, html`Энэ машины өөрийн анхааруулгын дүрэм ${n ? html`<span class="tag">${n} тохируулсан</span>` : html`<span class="muted">(нийтийн дүрмийг ашиглаж байна)</span>`}`);
   } catch (err) {
-    state.textContent = `Not saved: ${err.message}`;
+    state.textContent = `Хадгалагдаагүй: ${err.message}`;
     state.className = 'save-state err';
   } finally {
     btn.disabled = false;
@@ -2038,7 +2175,7 @@ function bindStatic() {
   $('#btn-test').addEventListener('click', testNotification);
   // Counter badges show a temporary view; the Alerts tab's own (saved) filters are kept.
   const showOpen = (sev) => {
-    showTempAlerts({ sev: [sev], unacked: true, range: 2160, type: '', imei: '' }, `unacknowledged ${sev === 'critical' ? 'critical alerts' : 'warnings'}, last 90 days`);
+    showTempAlerts({ sev: [sev], unacked: true, range: 2160, type: '', imei: '' }, `танилцаагүй ${sev === 'critical' ? 'ноцтой анхааруулга' : 'сэрэмжлүүлэг'}, сүүлийн 90 хоног`);
   };
   $('#cnt-crit').addEventListener('click', () => showOpen('critical'));
   $('#cnt-warn').addEventListener('click', () => showOpen('warning'));
@@ -2054,7 +2191,7 @@ function bindStatic() {
       else if (a === 'retry-settings') renderSettings();
       else if (a === 'retry-detail') loadDetail();
       else if (a === 'clear-fleet') {
-        Object.assign(S.fleet, { q: '', group: '', status: '', fuel: false, problems: false });
+        Object.assign(S.fleet, { q: '', group: '', status: '', fuel: false, problems: false, gps: false });
         syncFleetControls();
         renderFleet();
       } else if (a === 'enable-notif') requestNotif();
@@ -2081,14 +2218,16 @@ function bindStatic() {
   $('#f-status').addEventListener('change', (e) => { S.fleet.status = e.target.value; saveFleet(); renderFleet(); });
   $('#f-fuel').addEventListener('change', (e) => { S.fleet.fuel = e.target.checked; saveFleet(); renderFleet(); });
   $('#f-problems').addEventListener('change', (e) => { S.fleet.problems = e.target.checked; saveFleet(); renderFleet(); });
+  $('#f-gps').addEventListener('change', (e) => { S.fleet.gps = e.target.checked; saveFleet(); renderFleet(); });
   $('#fleet-tiles').addEventListener('click', (e) => {
     const t = e.target.closest('[data-tile]');
     if (!t) return;
     const k = t.dataset.tile;
     const f = S.fleet;
-    if (k === 'all') Object.assign(f, { status: '', fuel: false, problems: false });
+    if (k === 'all') Object.assign(f, { status: '', fuel: false, problems: false, gps: false });
     else if (k === 'fuel') f.fuel = !f.fuel;
     else if (k === 'problems') f.problems = !f.problems;
+    else if (k === 'gps') f.gps = !f.gps;
     else f.status = f.status === k ? '' : k;
     syncFleetControls();
     saveFleet();
@@ -2149,6 +2288,7 @@ function bindStatic() {
   $('#a-unacked').addEventListener('change', (e) => { S.alerts.f.unacked = e.target.checked; alertFilterChanged(); });
   $('#a-refresh').addEventListener('click', () => loadAlerts());
   $('#a-more').addEventListener('click', () => loadAlerts(true));
+  $('#a-xlsx').addEventListener('click', (e) => { e.preventDefault(); downloadAlertsExcel(e.currentTarget); });
   $('#a-ackall').addEventListener('click', ackAll);
   const alertOpen = (container, inDrawer) => {
     container.addEventListener('click', (e) => {
@@ -2184,6 +2324,32 @@ function bindStatic() {
   $('#r-csv').addEventListener('click', exportCsv);
   $('#r-excel-folder').addEventListener('click', (e) => openExcelFolder(e.currentTarget));
   $('#r-xlsx').addEventListener('click', (e) => { e.preventDefault(); downloadExcel(e.currentTarget); });
+  $('#f-xlsx').addEventListener('click', (e) => { e.preventDefault(); downloadExcel(e.currentTarget); });
+  // fuel receipts check
+  $('#r-rc-toggle').addEventListener('click', (e) => {
+    const box = $('#r-rc-add');
+    box.hidden = !box.hidden;
+    e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
+    if (!box.hidden) $('#r-rc-text').focus();
+  });
+  $('#r-rc-import').addEventListener('click', (e) => importReceipts(e.currentTarget));
+  $('#r-rc-filter').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-f]');
+    if (!b) return;
+    S.receipts.filter = b.dataset.f;
+    savePref('receiptsFilter', S.receipts.filter);
+    renderReceipts();
+  });
+  $('#r-rc-list').addEventListener('click', (e) => {
+    const del = e.target.closest('.js-rc-del');
+    if (del) { e.stopPropagation(); deleteReceipt(del.dataset.id); return; }
+    const tr = e.target.closest('tr[data-imei]');
+    if (tr) openVehicle(tr.dataset.imei, Number(tr.dataset.at));
+  });
+  $('#r-rc-list').addEventListener('keydown', (e) => {
+    const tr = e.target.closest('tr[data-imei]');
+    if (tr && e.key === 'Enter' && e.target === tr) openVehicle(tr.dataset.imei, Number(tr.dataset.at));
+  });
   $('.report-tbl thead').addEventListener('click', (e) => {
     const b = e.target.closest('[data-sort]');
     if (!b) return;
@@ -2198,7 +2364,7 @@ function bindStatic() {
     const k = e.target.name;
     const out = k && $(`output[data-eq="${k}"]`);
     if (out) out.textContent = ruleEq(k, e.target.value);
-    $('#s-rules-state').textContent = 'Unsaved changes';
+    $('#s-rules-state').textContent = 'Хадгалаагүй өөрчлөлт';
     $('#s-rules-state').className = 'save-state warn';
   });
   $('#s-rules').addEventListener('submit', async (e) => {
@@ -2211,11 +2377,11 @@ function bindStatic() {
       if (!el) continue;
       if (r.type === 'bool') th[r.k] = el.checked;
       else if (r.type === 'time') {
-        if (el.value && !/^\d{2}:\d{2}$/.test(el.value)) { state.textContent = `Check “${r.label}”.`; state.className = 'save-state err'; el.focus(); return; }
+        if (el.value && !/^\d{2}:\d{2}$/.test(el.value)) { state.textContent = `“${r.label}”-г шалгана уу.`; state.className = 'save-state err'; el.focus(); return; }
         th[r.k] = el.value || (S.settings?.thresholds?.[r.k] ?? '');
       } else {
         if (!isNum(el.value) || Number(el.value) < (r.min ?? 0) || Number(el.value) > (r.max ?? Infinity)) {
-          state.textContent = `“${r.label}” must be between ${fmtNum(r.min)} and ${fmtNum(r.max)}.`;
+          state.textContent = `“${r.label}” ${fmtNum(r.min)}–${fmtNum(r.max)} хооронд байх ёстой.`;
           state.className = 'save-state err';
           el.focus();
           return;
@@ -2223,17 +2389,17 @@ function bindStatic() {
         th[r.k] = Number(el.value);
       }
     }
-    state.textContent = 'Saving…';
+    state.textContent = 'Хадгалж байна…';
     state.className = 'save-state';
     try {
       const res = await api('/api/settings', { method: 'PUT', body: { thresholds: th } });
       if (res && res.thresholds) S.settings.thresholds = res.thresholds;
       else S.settings.thresholds = { ...S.settings.thresholds, ...th };
-      state.textContent = `Saved ${fmtTime(Date.now())}`;
+      state.textContent = `Хадгалсан ${fmtTime(Date.now())}`;
       state.className = 'save-state ok';
       if (S.view === 'fleet') renderFleet();
     } catch (err) {
-      state.textContent = `Not saved: ${err.message}`;
+      state.textContent = `Хадгалагдаагүй: ${err.message}`;
       state.className = 'save-state err';
     }
   });
@@ -2246,7 +2412,7 @@ function bindStatic() {
     const state = $('#s-notify-state');
     const severities = $$('input[name="sev"]', form).filter((c) => c.checked).map((c) => c.value);
     const notify = { windowsToast: form.elements.windowsToast.checked, severities };
-    state.textContent = 'Saving…';
+    state.textContent = 'Хадгалж байна…';
     state.className = 'save-state';
     try {
       const res = await api('/api/settings', { method: 'PUT', body: { notify } });
@@ -2255,10 +2421,10 @@ function bindStatic() {
       renderNotifyForm();
       renderBrowserCard();
       renderBanners();
-      state.textContent = `Saved ${fmtTime(Date.now())}`;
+      state.textContent = `Хадгалсан ${fmtTime(Date.now())}`;
       state.className = 'save-state ok';
     } catch (err) {
-      state.textContent = `Not saved: ${err.message}`;
+      state.textContent = `Хадгалагдаагүй: ${err.message}`;
       state.className = 'save-state err';
     }
   });
@@ -2292,7 +2458,7 @@ function bindStatic() {
     const body = { muted: tr.querySelector('[name="muted"]').checked };
     if (v?.hasFuel) {
       const { cal, error } = readCal(get);
-      if (error) { toast({ sev: 'warning', title: `${v.shortName}: not saved`, body: error }); return; }
+      if (error) { toast({ sev: 'warning', title: `${v.shortName}: хадгалагдаагүй`, body: error }); return; }
       body.cal = cal;
     }
     save.disabled = true;
@@ -2303,7 +2469,7 @@ function bindStatic() {
       setTimeout(() => tr.classList.remove('saved'), 1500);
     } catch (err) {
       save.disabled = false;
-      toast({ sev: 'warning', title: 'Not saved', body: err.message });
+      toast({ sev: 'warning', title: 'Хадгалагдаагүй', body: err.message });
     }
   });
 
@@ -2330,7 +2496,7 @@ function bindStatic() {
     e.preventDefault();
     if (!S.detail) return;
     const imei = S.detail.imei;
-    showTempAlerts({ imei, sev: [...SEVS], type: '', unacked: false, range: Math.max(S.alerts.f.range, 168) }, `all alerts of ${vName(imei)}`);
+    showTempAlerts({ imei, sev: [...SEVS], type: '', unacked: false, range: Math.max(S.alerts.f.range, 168) }, `${vName(imei)} машины бүх анхааруулга`);
   });
   // Opening the Alerts tab from the navigation brings back its own filters.
   $('.tabs a[data-view="alerts"]').addEventListener('click', () => { if (S.alerts.temp) restoreAlertFilters(S.view === 'alerts'); });
@@ -2343,25 +2509,25 @@ function bindStatic() {
 }
 function renderCalTableForce() {
   const dirty = $$('#sv-body tr.dirty');
-  if (dirty.length && !window.confirm('Discard unsaved calibration changes?')) return;
+  if (dirty.length && !window.confirm('Хадгалаагүй тохируулгын өөрчлөлтийг цуцлах уу?')) return;
   dirty.forEach((tr) => tr.classList.remove('dirty'));
   renderCalTable();
 }
 async function resetCalibration(imei) {
-  if (!window.confirm(`Go back to the default calibration for ${vName(imei)}?\n\nThis uses the GPS server's tank table if there is one, otherwise 0–10 000 mV.`)) return;
+  if (!window.confirm(`${vName(imei)} машиныг анхны тохируулга руу буцаах уу?\n\nGPS сервер дээр савны хүснэгт байвал түүнийг, үгүй бол 0–10 000 мВ-ийг ашиглана.`)) return;
   try {
     await saveVehicleSettings(imei, { cal: null });
     if (S.detail?.imei === imei) renderDetailForm();
     renderCalTableForce();
-    toast({ sev: 'good', title: 'Calibration reset', body: vName(imei) });
-  } catch (e) { toast({ sev: 'warning', title: 'Could not reset the calibration', body: e.message }); }
+    toast({ sev: 'good', title: 'Тохируулгыг буцаалаа', body: vName(imei) });
+  } catch (e) { toast({ sev: 'warning', title: 'Тохируулгыг буцааж чадсангүй', body: e.message }); }
 }
 async function ackVehicle(imei) {
-  if (!window.confirm(`Mark every open alert of ${vName(imei)} as seen?`)) return;
+  if (!window.confirm(`${vName(imei)} машины бүх нээлттэй анхааруулгатай танилцсан гэж тэмдэглэх үү?`)) return;
   try {
     await api('/api/alerts/ack-all', { method: 'POST', body: { imei } });
-    toast({ sev: 'good', title: 'Alerts acknowledged', body: vName(imei) });
-  } catch (e) { toast({ sev: 'warning', title: 'Could not acknowledge', body: e.message }); return; }
+    toast({ sev: 'good', title: 'Анхааруулгатай танилцлаа', body: vName(imei) });
+  } catch (e) { toast({ sev: 'warning', title: 'Танилцсан гэж тэмдэглэж чадсангүй', body: e.message }); return; }
   loadVehicles();
   if (S.detail?.imei === imei) loadDetail(true);
   if (S.alerts.loaded) loadAlerts();
@@ -2372,8 +2538,8 @@ function alertFilterChanged() {
   loadAlerts();
 }
 function saveFleet() {
-  const { group, status, fuel, problems, sort, dir } = S.fleet;
-  savePref('fleet', { group, status, fuel, problems, sort, dir });
+  const { group, status, fuel, problems, gps, sort, dir } = S.fleet;
+  savePref('fleet', { group, status, fuel, problems, gps, sort, dir });
 }
 function syncFleetControls() {
   $('#f-q').value = S.fleet.q;
@@ -2381,6 +2547,7 @@ function syncFleetControls() {
   $('#f-status').value = S.fleet.status;
   $('#f-fuel').checked = S.fleet.fuel;
   $('#f-problems').checked = S.fleet.problems;
+  $('#f-gps').checked = S.fleet.gps;
 }
 function applyTheme() {
   const t = S.prefs.theme;

@@ -4,6 +4,11 @@
 import { DEFAULT_THRESHOLDS, DEFAULT_CALIBRATION, CHECK_MIN_MINUTES, CHECK_MAX_MINUTES, clampCheckMinutes } from './config.js';
 import { LEDGER_TYPES } from './db.js';
 import { ledgerEntry, litersAt, fuelPct, amountLitres, fuelEventLitres, isPendingDrain, parseExtra } from './ledger.js';
+import { gpsFault, fuelSensorState, buildFleetStatusSheets } from './fleetstatus.js';
+import { mnTitle, mnDetail, mnAlertTypes } from './mn.js';
+import {
+  RECEIPTS_KEY, RECEIPTS_MAX, MISSING_MIN_L, MISSING_MIN_PCT, parseReceiptText, receiptId, refuelsFromRows, matchReceipts, receiptTotals, localMs,
+} from './receipts.js';
 import {
   log, errText, num, int01, clamp, round, fromApiDate, shortName, haversineM, fmtDuration, fmtLocal,
   tzOffsetMinutes, parseHHMM, isPlainObject, deepMerge,
@@ -17,22 +22,25 @@ const PENDING_TITLE = 'Possible fuel drop — checking (5 h)';
 const FALSE_ALARM_TITLE = 'False alarm — fuel sensor misreading (level came back)';
 const HOLD_MIN_MS = 20 * MIN; // after a gap in the data, wait at least this long for the backlog
 const HOLD_MAX_MS = 2 * HOUR; // ...and at most this long
+const OFFLINE_ALERT_MS = 6 * HOUR; // a silent tracker is alerted after this long (sooner only if the fuel changed)
+const OUTAGE_LEVEL_MS = 3 * HOUR; // a trusted level this old at most stands for the level when it went quiet
 
 /** Alert types the backend itself can produce, plus fallbacks for the detector's types. */
 export const BACKEND_ALERT_TYPES = {
   fuel_drain: { severity: 'critical', label: 'Fuel drain' },
   power_cut: { severity: 'critical', label: 'Tracker power cut' },
-  sensor_lost: { severity: 'warning', label: 'Fuel sensor lost' },
+  sensor_lost: { severity: 'critical', label: 'Fuel sensor lost' },
   low_fuel: { severity: 'warning', label: 'Low fuel' },
   long_idle: { severity: 'warning', label: 'Long idle' },
   overspeed: { severity: 'warning', label: 'Overspeed' },
-  offline: { severity: 'warning', label: 'Offline' },
+  offline: { severity: 'critical', label: 'Offline' },
   server_event: { severity: 'warning', label: 'GPS server event' },
   after_hours: { severity: 'warning', label: 'After-hours movement' },
   refuel: { severity: 'info', label: 'Refuel' },
   sensor_restored: { severity: 'info', label: 'Fuel sensor restored' },
   power_restored: { severity: 'info', label: 'Power restored' },
   back_online: { severity: 'info', label: 'Back online' },
+  receipt_mismatch: { severity: 'critical', label: 'Receipt mismatch' },
 };
 
 export class HttpError extends Error {
@@ -67,7 +75,7 @@ export class Engine {
     this.recs = new Map(); // imei -> vehicle record
     this.DetectorClass = null;
     this.detectorError = null;
-    this.alertTypes = { ...BACKEND_ALERT_TYPES };
+    this.alertTypes = mnAlertTypes(BACKEND_ALERT_TYPES);
     this.detectorCallsOnLevel = false;
     this.backendAfterHours = true;
     this.fakeId = 0; // negative ids handed to detectors for alerts suppressed during replay
@@ -101,6 +109,7 @@ export class Engine {
           if (!this.alertTypes[type].label) this.alertTypes[type].label = type;
         }
       }
+      this.alertTypes = mnAlertTypes(this.alertTypes); // labels shown in Mongolian
       const src = Function.prototype.toString.call(this.DetectorClass);
       // Final detector reports trusted levels through onLevel; the early draft did not, in
       // which case we sample its state after every push instead.
@@ -149,11 +158,13 @@ export class Engine {
       polledLevelT: null,
       offline: undefined, // unknown until the first objects poll
       offlineFrom: null,
+      outage: null, // { from, mv, lat, lng, alerted }: the current silence, until it is alerted or ends
       dbStatus: null,
       afterHoursNight: null,
       detErrors: 0,
       lastPushed: null, // last sample handed to the detector
       hold: null, // { from, since }: data gap after activity - waiting for the tracker's backlog
+      gps: null, // { valid, sats }: GPS fix of the newest point (objects poll)
       staleOfflineChecked: false,
       learnedJson: JSON.stringify(this.learned[imei] ?? null),
       futureLogged: false,
@@ -373,7 +384,7 @@ export class Engine {
   /** PUT /api/vehicles/:imei/settings */
   putVehicleSettings(imei, body) {
     const rec = this.recs.get(imei);
-    if (!rec) throw new HttpError(404, 'unknown vehicle');
+    if (!rec) throw new HttpError(404, 'Машин олдсонгүй');
     if (!isPlainObject(body)) throw bad('body must be a JSON object');
     const cur = this.vehicleSettings[imei] || {};
     const next = { ...cur };
@@ -402,7 +413,7 @@ export class Engine {
           }
         }
         const eff = { ...DEFAULT_CALIBRATION, ...this.cfg.defaultCalibration, ...cal };
-        if (eff.fullMv === eff.emptyMv) throw bad('cal.fullMv and cal.emptyMv must be different');
+        if (eff.fullMv === eff.emptyMv) throw bad('Дүүрэн ба хоосон үеийн заалт ялгаатай байх ёстой');
         // The dashboard sends the calibration shown in its form with every save (e.g. when
         // only "mute" was changed). If it equals what the vehicle inherits anyway (the GPS
         // server's table or the config default), keep no override, so the exact piecewise
@@ -482,6 +493,8 @@ export class Engine {
       }
       // the newest point as an OBJECT_GET_MESSAGES row, for objects-first polling (poller.js)
       rec.objRow = [o.dt_tracker, o.lat, o.lng, o.altitude, o.angle, o.speed, p];
+      // GPS fix of the newest point: loc_valid 0 = no position fix; gpslev = satellites in view
+      rec.gps = { valid: int01(o.loc_valid), sats: num(p.gpslev) };
     }
     // An answer missing most of the fleet is a server glitch, not the fleet going offline.
     const partial = this.lastObjCount >= 4 && seen < this.lastObjCount * 0.5;
@@ -535,24 +548,35 @@ export class Engine {
     return pwr >= (Number.isFinite(runV) ? Math.min(base, runV - 1000) : base);
   }
 
+  /**
+   * A tracker going quiet is not alerted at once (trucks often lose coverage for a while).
+   * It is alerted when the silence reaches OFFLINE_ALERT_MS, or - for a shorter silence - when
+   * the tracker reports again with a fuel level that changed while it was unreachable.
+   */
   checkOffline(rec, st, now) {
     const i = rec.info;
     const tz = this.cfg.timezone;
     if (st === 'offline') {
-      const firstLook = rec.offline === undefined;
-      const wasOnline = rec.offline === false
-        // first look after a restart: it was online when we last saw it and went quiet recently
-        || (firstLook && rec.dbStatus && rec.dbStatus !== 'offline' && i.lastSeen && now - i.lastSeen < 24 * HOUR);
-      if (rec.offline !== true) rec.offlineFrom = i.lastSeen ?? null;
-      if (wasOnline && i.lastSeen) {
+      if (rec.offline !== true) {
+        const firstLook = rec.offline === undefined;
+        const wasOnline = rec.offline === false
+          // first look after a restart: a known vehicle that went quiet recently (an alert
+          // already raised for this silence has the same key, so it is not raised twice)
+          || (firstLook && rec.dbStatus && i.lastSeen && now - i.lastSeen < 24 * HOUR);
+        rec.offlineFrom = i.lastSeen ?? null;
+        rec.outage = wasOnline && i.lastSeen ? this.outageStart(rec) : null;
+      }
+      const o = rec.outage;
+      if (o && !o.alerted && now - o.from >= OFFLINE_ALERT_MS) {
+        o.alerted = true;
         const moving = (i.speed ?? 0) >= 3;
-        // went quiet while the program was not running: recorded, but not popped up as news
-        const mode = firstLook && i.lastSeen < this.startedAt ? 'backfill' : 'live';
+        // the alert became due while the program was not running: recorded, but not popped up as news
+        const mode = o.from + OFFLINE_ALERT_MS < this.startedAt ? 'backfill' : 'live';
         this.raiseAlert({
-          imei: rec.imei, name: rec.v.name, type: 'offline', severity: 'warning', t: now, fromT: i.lastSeen,
+          imei: rec.imei, name: rec.v.name, type: 'offline', severity: 'critical', t: now, fromT: o.from,
           lat: i.lat, lng: i.lng, ongoing: true,
           title: 'Tracker stopped reporting',
-          detail: `No data for ${fmtDuration(now - i.lastSeen)} (last report ${fmtLocal(i.lastSeen, tz)}, ` +
+          detail: `No data for ${fmtDuration(now - o.from)} (last report ${fmtLocal(o.from, tz)}, ` +
             `${moving ? `moving at ${Math.round(i.speed)} km/h` : 'stopped'}). Possible causes: no mobile coverage, tracker unplugged or powered off.`,
         }, mode);
       }
@@ -560,23 +584,28 @@ export class Engine {
     } else {
       if (rec.offline === true && rec.offlineFrom && i.lastSeen && i.lastSeen > rec.offlineFrom) {
         const from = rec.offlineFrom;
-        this.raiseAlert({
-          imei: rec.imei, name: rec.v.name, type: 'back_online', severity: 'info', t: i.lastSeen, fromT: from,
-          lat: i.lat, lng: i.lng,
-          title: 'Tracker back online',
-          detail: `Reporting again after ${fmtDuration(i.lastSeen - from)} without data (silent since ${fmtLocal(from, tz)}).`,
-        }, 'live');
-        // close only this outage's alert; one outage never closes another
-        for (const row of this.db.ongoingAlerts(rec.imei, 'offline')) {
-          if ((row.from_t ?? from) !== from) continue;
-          this.patchAlert(row.id, {
-            ongoing: false,
-            detail: `No data from ${fmtLocal(from, tz)} until ${fmtLocal(i.lastSeen, tz)} (${fmtDuration(i.lastSeen - from)}).`,
-          }, true);
+        // this outage's alert only; one outage never closes another
+        const open = this.db.ongoingAlerts(rec.imei, 'offline').filter((row) => (row.from_t ?? from) === from);
+        if (rec.outage?.alerted || open.length) {
+          this.raiseAlert({
+            imei: rec.imei, name: rec.v.name, type: 'back_online', severity: 'info', t: i.lastSeen, fromT: from,
+            lat: i.lat, lng: i.lng,
+            title: 'Tracker back online',
+            detail: `Reporting again after ${fmtDuration(i.lastSeen - from)} without data (silent since ${fmtLocal(from, tz)}).`,
+          }, 'live');
+          for (const row of open) {
+            this.patchAlert(row.id, {
+              ongoing: false,
+              detail: `No data from ${fmtLocal(from, tz)} until ${fmtLocal(i.lastSeen, tz)} (${fmtDuration(i.lastSeen - from)}).`,
+            }, true);
+          }
+        } else if (rec.outage) {
+          this.checkOutageFuel(rec, rec.outage);
         }
       }
       rec.offline = false;
       rec.offlineFrom = null;
+      rec.outage = null;
       if (!rec.staleOfflineChecked && this.historyReady) this.closeStaleOffline(rec);
     }
     rec.dbStatus = null;
@@ -603,6 +632,52 @@ export class Engine {
         detail: `Reporting again after ${fmtDuration(end - from)} without data (silent since ${fmtLocal(from, tz)}).`,
       }, 'backfill');
     }
+  }
+
+  /** The vehicle's state when it went quiet: last report, position and the fuel level then. */
+  outageStart(rec) {
+    const i = rec.info;
+    let mv = null;
+    if (rec.v.hasFuel) {
+      const st = this.detState(rec);
+      const minMv = this.settingsFor(rec.imei).th.sensorMinValidMv ?? 100;
+      const recent = (t) => Number.isFinite(t) && i.lastSeen - t <= OUTAGE_LEVEL_MS;
+      if (Number.isFinite(st?.level) && recent(st.levelT)) mv = st.level;
+      else if (rec.lastLevel && Number.isFinite(rec.lastLevel.mv) && recent(rec.lastLevel.t)) mv = rec.lastLevel.mv;
+      else if (Number.isFinite(i.fuelRaw) && i.fuelRaw >= minMv) mv = i.fuelRaw;
+    }
+    return { from: i.lastSeen, mv, lat: i.lat ?? null, lng: i.lng ?? null, alerted: false };
+  }
+
+  /** A silence shorter than OFFLINE_ALERT_MS just ended: alert it only if the fuel level changed
+   *  across it by more than the usual thresholds (plus normal consumption if it drove unseen). */
+  checkOutageFuel(rec, o) {
+    const i = rec.info;
+    if (!rec.v.hasFuel || !Number.isFinite(o.mv)) return;
+    const th = this.settingsFor(rec.imei).th;
+    const mv = i.fuelRaw;
+    if (!Number.isFinite(mv) || mv < (th.sensorMinValidMv ?? 100)) return;
+    const hours = (i.lastSeen - o.from) / HOUR;
+    const known = [o.lat, o.lng, i.lat, i.lng].every(Number.isFinite);
+    const moved = !known || haversineM(o.lat, o.lng, i.lat, i.lng) > 500;
+    // the reading now is a single raw sample: more slosh while driving
+    const margin = (i.speed ?? 0) >= 3 ? 300 : 0;
+    const allowDrop = (moved ? th.drainTripMv + th.consumptionMvPerHour * hours * 1.5 : th.drainParkedMv) + margin;
+    const allowRise = th.refuelMv + margin;
+    const diff = mv - o.mv;
+    if (diff > -allowDrop && diff < allowRise) return;
+    const tz = this.cfg.timezone;
+    const cal = this.vehicleCal(rec.imei);
+    const hasL = !!(cal.tankLiters || (Array.isArray(cal.table) && cal.table.length >= 2));
+    const fmt = (x) => (hasL ? `${round(this.litersAt(x, cal), 0)} L` : `${Math.round(x)} mV`);
+    const drop = diff < 0;
+    this.raiseAlert({
+      imei: rec.imei, name: rec.v.name, type: 'offline', severity: drop ? 'critical' : 'warning',
+      t: i.lastSeen, fromT: o.from, lat: i.lat, lng: i.lng, amountMv: Math.round(Math.abs(diff)),
+      title: drop ? 'Fuel dropped while tracker was offline' : 'Fuel rose while tracker was offline',
+      detail: `No data from ${fmtLocal(o.from, tz)} until ${fmtLocal(i.lastSeen, tz)} (${fmtDuration(i.lastSeen - o.from)}). ` +
+        `Fuel ${fmt(o.mv)} before, ${fmt(mv)} after${moved ? ' (the vehicle moved meanwhile)' : ''}.`,
+    }, 'live');
   }
 
   // =============================================================================
@@ -1040,6 +1115,136 @@ export class Engine {
     }
   }
 
+  // =============================================================================
+  // fuel receipts (receipts.js): litres paid for vs. litres that reached the tank
+  // =============================================================================
+  receiptsStored() {
+    const v = this.db.getSetting(RECEIPTS_KEY, []);
+    return Array.isArray(v) ? v : [];
+  }
+
+  /** The oldest data this program has (receipts before it cannot be checked). */
+  receiptDataFrom() {
+    let from = null;
+    try {
+      for (const t of [num(this.db.getMeta?.('ledgerSince')), this.db.firstSampleEver?.() ?? null]) {
+        if (Number.isFinite(t) && (from === null || t < from)) from = t;
+      }
+    } catch {
+      /* unknown */
+    }
+    return from;
+  }
+
+  /** hasData(imei, from, to) for matchReceipts: the vehicle stored fuel levels then (null = unknown). */
+  receiptHasData() {
+    return (imei, from, to) => {
+      try {
+        return this.db.levelsRange(imei, from, to).length > 0;
+      } catch {
+        return true;
+      }
+    };
+  }
+
+  receiptResults(now = Date.now(), refuelRows = null) {
+    const list = this.receiptsStored();
+    if (!list.length) return [];
+    let rows = refuelRows;
+    if (!rows) {
+      try {
+        rows = this.db.ledgerAlerts();
+      } catch (e) {
+        log('error', 'Reading refuels for the receipt check failed:', e);
+        rows = [];
+      }
+    }
+    return matchReceipts(list, refuelsFromRows(rows), {
+      calFor: (imei) => this.vehicleCal(imei),
+      hasFuel: (imei) => this.recs.get(imei)?.v.hasFuel ?? true,
+      tzMin: this.tzOffsetMin, now, dataFrom: this.receiptDataFrom(), hasData: this.receiptHasData(),
+    });
+  }
+
+  /** GET /api/receipts */
+  receiptsView(now = Date.now(), refuelRows = null) {
+    const receipts = this.receiptResults(now, refuelRows);
+    return { receipts, totals: receiptTotals(receipts), missingMinL: MISSING_MIN_L, missingMinPct: MISSING_MIN_PCT };
+  }
+
+  /** POST /api/receipts { text }: rows pasted from Excel (vehicle, date [time], litres). */
+  addReceipts(body, now = Date.now()) {
+    if (!isPlainObject(body) || typeof body.text !== 'string') throw bad('Excel-ээс хуулсан мөрүүдийг { text } хэлбэрээр илгээнэ үү');
+    if (body.text.length > 2_000_000) throw bad('Нэг удаад хэт их текст байна');
+    const vehicles = [...this.recs.values()].map((r) => ({ imei: r.imei, name: r.v.name, shortName: shortName(r.v.name), plate: r.info.plate }));
+    const { rows, skipped } = parseReceiptText(body.text, vehicles);
+    const stored = this.receiptsStored();
+    const ids = new Set(stored.map((r) => r.id));
+    let added = 0;
+    let duplicates = 0;
+    for (const r of rows) {
+      const id = receiptId(r);
+      if (ids.has(id)) { duplicates++; continue; }
+      ids.add(id);
+      stored.push({ id, imei: r.imei, vehicle: r.vehicle, date: r.date, ...(r.dateTo ? { dateTo: r.dateTo } : {}), time: r.time, litres: r.litres, addedAt: now });
+      added++;
+    }
+    if (stored.length > RECEIPTS_MAX) throw bad(`Хамгийн ихдээ ${RECEIPTS_MAX} баримт хадгална; эхлээд хуучныг нь устгана уу`);
+    if (added) {
+      this.db.setSetting(RECEIPTS_KEY, stored);
+      this.ledger?.touch('receipts');
+      // found on import: shown in the result right away, recorded without pop-ups
+      this.checkReceipts(now, 'backfill');
+    }
+    return { added, duplicates, skipped, ...this.receiptsView(now) };
+  }
+
+  /** DELETE /api/receipts/:id ('all' deletes every receipt). */
+  deleteReceipt(id, now = Date.now()) {
+    const stored = this.receiptsStored();
+    const next = id === 'all' ? [] : stored.filter((r) => r.id !== id);
+    if (next.length === stored.length) throw new HttpError(404, 'Баримт олдсонгүй');
+    this.db.setSetting(RECEIPTS_KEY, next);
+    this.ledger?.touch('receipts');
+    return this.receiptsView(now);
+  }
+
+  /**
+   * Alerts for receipts the tank does not account for (runs after each check, so a receipt
+   * pasted before its refuel was processed is judged once the data is in). One alert per
+   * receipt: its key is the receipt's id.
+   */
+  checkReceipts(now = Date.now(), mode = 'live') {
+    if (!this.receiptsStored().length) return;
+    const tz = this.cfg.timezone;
+    const fmt = (x) => `${Math.round(x)} L`;
+    for (const r of this.receiptResults(now)) {
+      try {
+        const when = `${r.date}${r.time ? ` ${r.time}` : ''}`;
+        const base = { imei: r.imei, name: this.recs.get(r.imei)?.v.name ?? r.vehicle, type: 'receipt_mismatch', key: `receipt:${r.id}`, receiptId: r.id, receiptL: r.litres };
+        if (r.status === 'short') {
+          const f = r.refuel;
+          this.raiseAlert({
+            ...base, severity: 'critical', t: f.t, fromT: f.fromT, lat: f.lat, lng: f.lng,
+            wentInL: f.wentIn, missingL: r.missing, roomL: r.room,
+            title: `Receipt ${fmt(r.litres)}, tank got ${fmt(f.wentIn)}`,
+            detail: `Fuel receipt for ${fmt(r.litres)} (${when}), but the tank rose only ${fmt(f.wentIn)}` +
+              `${f.before !== null && f.after !== null ? ` (${fmt(f.before)} → ${fmt(f.after)})` : ''} at ${fmtLocal(f.fromT, tz)}: ${fmt(r.missing)} missing.` +
+              `${r.nofit ? ` The receipt does not even fit: the tank had room for only ${fmt(r.room)}.` : ''}`,
+          }, mode);
+        } else if (r.status === 'norefuel') {
+          this.raiseAlert({
+            ...base, severity: 'warning', t: localMs(r.date, r.time, this.tzOffsetMin), fromT: null,
+            title: `Receipt ${fmt(r.litres)}, no refuel recorded`,
+            detail: `Fuel receipt for ${fmt(r.litres)} (${when}), but the fuel sensor shows no refuel ${r.time ? 'around that time' : 'that day'}.`,
+          }, mode);
+        }
+      } catch (e) {
+        log('error', 'Checking a fuel receipt failed:', e);
+      }
+    }
+  }
+
   /** Litres of a refuel / drain amount (see ledger.js amountLitres). */
   amountLitres(type, amountMv, extraJson, cal) {
     return amountLitres(type, amountMv, extraJson, cal);
@@ -1067,8 +1272,12 @@ export class Engine {
       severity: row.severity,
       t: row.t,
       fromT: row.from_t,
-      title: row.title,
-      detail: row.detail,
+      // shown in Mongolian (src/mn.js); the English originals are what is stored, and what the
+      // fuel ledger's "situation" and "cancelled" rules read
+      title: mnTitle(row.title),
+      detail: mnDetail(row.detail),
+      titleEn: row.title,
+      detailEn: row.detail,
       amountMv: row.amount_mv === null ? null : round(row.amount_mv),
       amountL,
       lat: row.lat,
@@ -1104,14 +1313,14 @@ export class Engine {
     if (body.verdict !== undefined) {
       const v = body.verdict === null ? 'unchecked' : body.verdict;
       if (typeof v !== 'string' || !VERDICTS.includes(v)) throw bad(`verdict must be one of ${VERDICTS.join(', ')}`);
-      if (v !== 'unchecked' && row.type !== 'fuel_drain') throw bad('a verdict can only be given for fuel drain alerts');
+      if (v !== 'unchecked' && row.type !== 'fuel_drain') throw bad('Дүгнэлтийг зөвхөн түлш алдагдлын анхааруулгад өгнө');
       verdict = v;
     }
     if (body.note !== undefined) {
       if (body.note !== null && typeof body.note !== 'string') throw bad('note must be text');
       // keep line breaks and tabs, drop other control characters
       const text = String(body.note ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').trim();
-      if (text.length > NOTE_MAX) throw bad(`note is too long (${text.length} characters, at most ${NOTE_MAX})`);
+      if (text.length > NOTE_MAX) throw bad(`Тэмдэглэл хэт урт байна (${text.length} тэмдэгт, хамгийн ихдээ ${NOTE_MAX})`);
       note = text || null;
     }
     const now = Date.now();
@@ -1204,7 +1413,7 @@ export class Engine {
         rawMv: i.fuelRaw ?? null,
       };
     }
-    return {
+    const view = {
       imei: rec.imei,
       name: rec.v.name,
       shortName: shortName(rec.v.name),
@@ -1218,6 +1427,7 @@ export class Engine {
       angle: i.angle ?? null,
       ign: i.ign ?? null,
       pwrMv: i.pwr ?? null,
+      gps: rec.gps ?? null,
       status: this.computeStatus(rec, now),
       lastSeen: i.lastSeen ?? null,
       fuel,
@@ -1227,6 +1437,18 @@ export class Engine {
       idleSince: Number.isFinite(st?.idleSince) ? st.idleSince : null,
       odometerKm: i.odometerKm ?? null,
     };
+    const th = this.settingsFor(rec.imei).th;
+    view.gpsFault = gpsFault(view, th, now); // { code, text } | null
+    view.fuelSensor = fuelSensorState(view, th, now); // 'none' | 'fault' | 'ok' | 'nodata' | 'waiting'
+    return view;
+  }
+
+  /** Sheets for the "Fleet status" Excel download: every vehicle's GPS tracker and fuel sensor state. */
+  fleetStatusSheets(now = Date.now()) {
+    return buildFleetStatusSheets({
+      vehicles: [...this.recs.values()].map((r) => this.vehicleView(r, null, now)),
+      now, tzOffsetMinutes: this.tzOffsetMin, timezone: this.cfg.timezone,
+    });
   }
 
   vehiclesView(now = Date.now()) {
@@ -1245,8 +1467,8 @@ export class Engine {
   /** GET /api/vehicles/:imei/history */
   history(imei, hours) {
     const rec = this.recs.get(imei);
-    if (!rec) throw new HttpError(404, 'unknown vehicle');
-    const h = clamp(num(hours) ?? 24, 1, 168);
+    if (!rec) throw new HttpError(404, 'Машин олдсонгүй');
+    const h = clamp(num(hours) ?? 24, 1, 1464); // up to 61 days (raw messages are kept keepHours)
     const to = Date.now();
     const from = to - h * HOUR;
     const rows = this.db.samplesRange(imei, from, to);

@@ -1,11 +1,13 @@
 # private data and settings - never published
 data/
+data-backup*/
 config.local.json
 calibrations.json
 Fuel events.xlsx
 *.xlsx
 .env*
 testdata/
+evidence/
 *.log
 *.db
 *.db-wal
