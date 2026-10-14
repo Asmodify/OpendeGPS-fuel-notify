@@ -93,6 +93,22 @@ table). The vehicle's page has a **Use the default calibration** link to go back
 - **Mute** a vehicle (for example while it is in the workshop) to stop its pop-ups. Its alerts
   are still recorded.
 
+## Link to Open Tee (admin web and driver app)
+
+On the server the program can send its alerts to the Open Tee API and check the refuel
+receipts drivers enter in the Open Tee app (or staff enter in the admin web):
+
+- Refuels, suspected drains, low fuel and fuel sensor faults go to the API every minute. The
+  admin web lists them on **GPS түлшний хяналт**, where staff mark a drain as theft or a false
+  alarm (their verdict is kept even if this program later changes its own).
+- Receipts come the other way. Each one is matched to the refuel the fuel sensor saw (the
+  same check as receipts pasted from Excel), and the result goes back: how many litres reached
+  the tank and how many are missing. The admin web's **Түлш цэнэглэлт** and the driver app show it.
+
+It is off until a key is set: `OPENTEE_KEY` in `.env` (the same value as `FUEL_WARNER_KEY` on
+the API, at least 24 characters). `OPENTEE_URL` changes the API address (default
+`https://api.opendevelopment.mn`). Litres only, no money leaves this program.
+
 ## What each alert means
 
 | Alert | Level | Meaning |
@@ -156,6 +172,9 @@ Environment variables (for special setups):
 | `CONFIG` | `config.json` here | Use a different settings file |
 | `NO_BACKFILL` | – | `1` = do not download history at start (for quick tests) |
 | `EXCEL_FILE` | `Fuel events.xlsx` here | Where the Excel fuel ledger is written |
+| `OPENTEE_KEY` | – | Turns on the link to the Open Tee API (see above) |
+| `OPENTEE_URL` | `https://api.opendevelopment.mn` | The Open Tee API address |
+| `OPENTEE_RESEND` | – | `1` = send every fuel alert to Open Tee again from the start |
 
 History is kept for 61 days (`keepHours`; the dashboard shows up to 60 days), fuel levels and alerts for 90 days (`keepDays`),
 refuels and fuel drains forever (they are the Excel fuel ledger). At start-up up to 31 days of
