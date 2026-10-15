@@ -1,10 +1,12 @@
 // Evidence pack: printable pages for theft alerts, opened from the dashboard's "Нотлох баримт"
 // view (or an alert's "Нотлох баримт" button) as evidence.html#ids=12,15,40.
 // The first page sums them up (per truck, then every incident in one table); after it comes one
-// A4 page per incident: the facts, the fuel chart around it (the bright line is the actual fuel
-// level), the track on a map, the fuel receipts of those days and lines to sign. The browser's
-// print dialog turns it into paper or a PDF ("Save as PDF").
-import { html, setHTML, $, $$, fmtNum, fmtDur, isNum, normCal, api } from './util.js';
+// A4 page per incident: the facts, the fuel chart around it (the bright line is the fuel meter's
+// own readings, as the tracker sent them), the track on a map, the fuel receipts of those days
+// and lines to sign. Only litres the meter itself shows are counted: an incident where the meter
+// went up (a refuel), dipped and came back, or the sensor is broken is marked "not evidence" and
+// left out of the totals. The browser's print dialog turns it into paper or a PDF.
+import { html, setHTML, $, $$, fmtNum, fmtDur, isNum, normCal, api, METER_LABEL, meterConfirms } from './util.js';
 import { FuelChart } from './chart.js';
 
 const MAX_PAGES = 300;
@@ -28,7 +30,7 @@ const ids = [...new Set((new URLSearchParams(location.hash.slice(1)).get('ids') 
   .filter((n) => Number.isSafeInteger(n) && n > 0)
   .slice(0, MAX_PAGES);
 let types = {};
-const typeLabel = (t) => types[t]?.label || { fuel_drain: 'Түлш алдагдал', receipt_mismatch: 'Баримт зөрсөн', refuel: 'Түлш цэнэглэлт' }[t] || t;
+const typeLabel = (t) => types[t]?.label || { fuel_drain: 'Түлш алдагдал', receipt_mismatch: 'Баримтаас дутуу цэнэглэлт', refuel: 'Түлш цэнэглэлт' }[t] || t;
 const L = (v, d = 0) => (isNum(v) ? `${fmtNum(Number(v), d)} л` : '—');
 const valid = (lat, lng) => isNum(lat) && isNum(lng) && !(Number(lat) === 0 && Number(lng) === 0) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
 const mapsUrl = (p) => `https://maps.google.com/?q=${Number(p.lat).toFixed(6)},${Number(p.lng).toFixed(6)}`;
@@ -43,6 +45,9 @@ const fmtShort = (ms, withTime = true) => {
 };
 const plateOf = (e) => e.vehicle.shortName || e.vehicle.plate || e.vehicle.imei || '';
 const lostOf = (e) => (isNum(e.lostL) ? Number(e.lostL) : null);
+/** The fuel meter shows the loss (no meter check: an older server, taken as shown). */
+const confirmed = (e) => !e.meter || meterConfirms(e.meter);
+const meterLabel = (e) => (e.meter ? METER_LABEL[e.meter.verdict] || e.meter.verdict : '');
 
 /** The litres the fuel fell by (before → after), when the alert knows both levels. */
 function fellBy(e) {
@@ -83,6 +88,7 @@ async function loadAll() {
 function summaryPage(list, now) {
   const ok = list.filter((e) => e && !e.error);
   const total = ok.reduce((s, e) => s + (lostOf(e) ?? 0), 0);
+  const notEvidence = ok.filter((e) => !confirmed(e)).length;
   const trucks = new Map();
   for (const e of ok) {
     const k = e.vehicle.imei;
@@ -104,7 +110,7 @@ function summaryPage(list, now) {
       <div><span>Бэлтгэсэн</span><b>${fmtShort(now)}</b></div>
     </div>
     <div class="sum-tiles">
-      <div class="sum-tile"><span>Тохиолдол</span><b>${ok.length}</b></div>
+      <div class="sum-tile"><span>Тоолуураар батлагдсан</span><b>${ok.length - notEvidence}${notEvidence ? html`<small> / ${ok.length}</small>` : ''}</b></div>
       <div class="sum-tile bad"><span>Алдсан түлш</span><b>${L(total)}</b></div>
       <div class="sum-tile"><span>Машин</span><b>${truckList.length}</b></div>
     </div>
@@ -115,20 +121,20 @@ function summaryPage(list, now) {
     </table>` : ''}
     <h3>Тохиолдлууд</h3>
     <table class="ev-tbl incidents">
-      <thead><tr><th class="num">№</th><th>Машин</th><th>Эхэлсэн</th><th>Юу болсон</th><th class="num">Өмнө → Дараа</th><th class="num">Алдсан</th><th>Байршил</th><th>Дүгнэлт</th></tr></thead>
+      <thead><tr><th class="num">№</th><th>Машин</th><th>Эхэлсэн</th><th>Юу болсон</th><th class="num">Тоолуур: өмнө → дараа</th><th class="num">Алдсан</th><th>Байршил</th><th>Дүгнэлт</th></tr></thead>
       <tbody>${list.map((e, i) => (!e || e.error
     ? html`<tr><td class="num">${i + 1}</td><td colspan="7" class="muted">Анхааруулга #${ids[i]}: ачаалж чадсангүй${e?.error ? ` (${e.error})` : ''}</td></tr>`
-    : html`<tr><td class="num">${i + 1}</td><td class="nowrap"><b>${plateOf(e)}</b></td><td class="nowrap">${fmtShort(e.eventFrom)}</td><td>${e.alert.title || typeLabel(e.alert.type)}</td>
+    : html`<tr class="${confirmed(e) ? '' : 'not-ev'}"><td class="num">${i + 1}</td><td class="nowrap"><b>${plateOf(e)}</b></td><td class="nowrap">${fmtShort(e.eventFrom)}</td><td>${e.alert.title || typeLabel(e.alert.type)}${confirmed(e) ? '' : html`<small class="m-no">${meterLabel(e)}</small>`}</td>
           <td class="num nowrap">${isNum(e.before?.liters) && isNum(e.after?.liters) ? `${L(e.before.liters)} → ${L(e.after.liters)}` : e.receipt ? `баримт ${L(e.receipt.litres)}` : '—'}</td>
           <td class="num bad nowrap"><b>${L(lostOf(e))}</b></td>
           <td class="nowrap">${e.place ? html`<a href="${mapsUrl(e.place)}" target="_blank" rel="noopener">${coord(e.place)}</a>` : '—'}</td>
           <td>${e.alert.type === 'fuel_drain' ? VERDICTS[e.alert.verdict] || '' : ''}</td></tr>`))}</tbody>
-      <tfoot><tr><td></td><td colspan="4"><b>Нийт</b></td><td class="num bad nowrap"><b>${L(total)}</b></td><td colspan="2"></td></tr></tfoot>
+      <tfoot><tr><td></td><td colspan="4"><b>Нийт</b>${notEvidence ? html` <span class="muted">(тоолуур батлаагүй ${notEvidence} тохиолдлыг оруулаагүй)</span>` : ''}</td><td class="num bad nowrap"><b>${L(total)}</b></td><td colspan="2"></td></tr></tfoot>
     </table>
     <div class="how">
       <h3>Хэрхэн уншихыг</h3>
-      <p>Тохиолдол бүр дараагийн хуудсуудад нэг A4 хуудастай. Графикт <i class="k-level"></i><b>улбар шар зузаан шугам</b> нь машин зогсож байх үеийн тогтворжсон, бодит түлшний түвшин; <i class="k-raw"></i>цайвар цэнхэр нимгэн шугам нь мэдрэгчийн түүхий заалт (явж байхад савлана); <i class="k-drain"></i>улаан бүс нь түлш алдагдсан хугацаа. Доод хэсэгт хурд, хөдөлгүүр, тэжээлийн (масс) төлөв.</p>
-      <p>“Алдсан” нь машины явсан зам, хөдөлгүүрийн цагаар тайлбарлагдахгүй алдагдал (зогсоолд буурсан бол бүхэлдээ). Литрийг машины савны тохируулгын хүснэгтээр тооцсон. Мэдээллийг GPS төхөөрөмжөөс (fms.gpsbox.mn) авсан, өөрчлөөгүй.</p>
+      <p>Тохиолдол бүр дараагийн хуудсуудад нэг A4 хуудастай. Графикт <i class="k-raw"></i><b>улбар шар зузаан шугам</b> нь түлшний тоолуурын (мэдрэгчийн) заалт: GPS төхөөрөмжөөс ирсэн тэр чигээрээ, дундажлаагүй. Машин явж байхад түлш савлаж шугам хэлбэлзэнэ; зогсож байх үеийн заалт түвшинг үнэн харуулна. <i class="k-drain"></i>Улаан бүс нь түлш алдагдсан хугацаа. Доод хэсэгт хурд, хөдөлгүүр, тэжээлийн (масс) төлөв.</p>
+      <p>“Өмнө”, “дараа” нь тохиолдлын өмнөх ба дараах зогсож байх үеийн тоолуурын заалт. “Алдсан” нь тоолуурын бууралт (замд явсан бол замын хэвийн хэрэглээг хассан); системийн тооцоо үүнээс бага бол бага нь. Тоолуур өссөн (цэнэглэлт), буураад буцаж өссөн, эсвэл мэдрэгч гэмтсэн тохиолдлыг хулгайд тооцохгүй, нийтэд оруулахгүй. Литрийг машины савны тохируулгын хүснэгтээр тооцсон. Мэдээллийг GPS төхөөрөмжөөс (fms.gpsbox.mn) авсан, өөрчлөөгүй.</p>
     </div>
     ${pageFoot()}
   </section>`;
@@ -164,17 +170,22 @@ function incidentPage(e, i, n) {
     fact(span > 60e3 ? 'Илэрсэн' : 'Огноо', fmtShort(e.eventTo)),
     span > 60e3 ? fact('Үргэлжилсэн', fmtDur(span)) : '',
   ];
+  const m = e.meter;
   if (a.type === 'receipt_mismatch' && e.receipt) {
+    const wentIn = isNum(m?.wentIn) ? m.wentIn : e.receipt.wentIn;
     facts.push(
       fact('Баримтад', L(e.receipt.litres, 1)),
-      fact('Саванд орсон', isNum(e.receipt.wentIn) ? L(e.receipt.wentIn, 1) : 'Цэнэглэлт бүртгэгдээгүй'),
+      fact('Тоолуурт орсон', isNum(wentIn) && wentIn > 0 ? L(wentIn, 1) : 'Цэнэглэлт харагдаагүй'),
+      isNum(e.before?.liters) ? fact('Тоолуур (цэнэглэхийн өмнө)', L(e.before.liters, 1)) : '',
+      isNum(e.after?.liters) ? fact('Тоолуур (цэнэглэсний дараа)', L(e.after.liters, 1)) : '',
       isNum(e.receipt.room) ? fact('Саванд багтах байсан', L(e.receipt.room, 1)) : '',
     );
   } else {
     facts.push(
-      fact('Өмнөх түвшин', L(e.before?.liters, 1)),
-      fact('Дараах түвшин', L(e.after?.liters, 1)),
-      isNum(fell) ? fact('Буурсан', L(fell, 1)) : '',
+      fact('Тоолуур (өмнө)', L(e.before?.liters, 1)),
+      fact('Тоолуур (дараа)', L(e.after?.liters, 1)),
+      isNum(fell) ? fact(fell < 0 ? 'Өссөн' : 'Буурсан', L(Math.abs(fell), 1), fell < 0 ? 'good' : '') : '',
+      isNum(m?.used) && m.used > 0 ? fact('Замын хэвийн хэрэглээ', L(m.used, 1)) : '',
     );
   }
   const actFacts = act ? [
@@ -184,19 +195,21 @@ function incidentPage(e, i, n) {
     act.noDataMs > 0 ? fact('GPS мэдээлэлгүй', fmtDur(act.noDataMs), 'warn') : '',
   ] : [];
   const verdict = a.type === 'fuel_drain' ? VERDICTS[a.verdict] : null;
+  const isEv = confirmed(e);
   return html`<section class="page incident" data-i="${i}">
     ${pageHead(`Нотлох баримт № ${i + 1}`, `${i + 1} / ${n}`)}
     <div class="inc-top">
       <div class="inc-truck"><b>${plateOf(e)}</b><span>${[e.vehicle.group, e.vehicle.tankLiters ? `сав ${fmtNum(e.vehicle.tankLiters)} л` : ''].filter(Boolean).join(' · ')}</span></div>
       <div class="inc-what"><span class="kind">${typeLabel(a.type)} · ${SEV_LABEL[a.severity] || ''}</span><b>${a.title || typeLabel(a.type)}</b>
         ${verdict ? html`<span class="verdict v-${a.verdict}">${verdict}</span>` : ''}</div>
-      <div class="inc-lost"><span>Алдсан</span><b>${L(lost)}</b></div>
+      <div class="inc-lost${isEv ? '' : ' none'}"><span>${isEv ? 'Алдсан' : 'Хулгай'}</span><b>${isEv ? L(lost) : 'Батлагдаагүй'}</b></div>
     </div>
+    ${isEv ? '' : html`<div class="not-evidence"><b>Энэ тохиолдлыг хулгайн нотолгоо болгож болохгүй.</b> ${meterLabel(e)}${e.meter?.verdict === 'refuel' ? ': түлш нэмэгдсэн нь цэнэглэлт.' : '.'} Графикийн тоолуурын заалтыг харна уу.</div>`}
     <div class="facts">${facts}${actFacts}
       ${e.place ? html`<div class="fact wide"><span>Байршил${e.place.source === 'stop' ? ' (зогсож байсан цэг)' : ''}</span><b><a href="${mapsUrl(e.place)}" target="_blank" rel="noopener">${coord(e.place)}</a></b></div>` : ''}
     </div>
-    ${e.dataKept ? html`<div class="fig"><div class="fig-cap">Түлшний түвшин ба машины төлөв, ${fmtShort(e.from)} — ${fmtShort(e.to)}</div><div class="ev-chart"></div>
-      <div class="legend"><span><i class="lg-level"></i>Бодит түвшин (тогтворжсон)</span><span><i class="lg-raw"></i>Мэдрэгчийн түүхий заалт</span><span><i class="lg-drain"></i>Түлш алдагдал</span><span><i class="lg-refuel"></i>Цэнэглэлт</span><span><i class="lg-ign"></i>Хөдөлгүүр</span><span><i class="lg-pwroff"></i>Тэжээл унтраастай</span></div></div>
+    ${e.dataKept ? html`<div class="fig"><div class="fig-cap">Түлшний тоолуурын заалт ба машины төлөв, ${fmtShort(e.from)} — ${fmtShort(e.to)}</div><div class="ev-chart"></div>
+      <div class="legend"><span><i class="lg-raw"></i>Түлшний тоолуурын заалт (GPS-ээс ирсэн тэр чигээрээ)</span><span><i class="lg-drain"></i>Түлш алдагдал</span><span><i class="lg-refuel"></i>Цэнэглэлт</span><span><i class="lg-ign"></i>Хөдөлгүүр</span><span><i class="lg-pwroff"></i>Тэжээл унтраастай</span></div></div>
       <div class="fig"><div class="fig-cap">Явсан зам: <i class="k-track"></i>энэ хугацаанд, <i class="k-ev"></i>түлш алдагдсан үед, <i class="k-pin"></i>${e.place?.source === 'stop' ? 'зогсож байсан цэг' : 'илэрсэн цэг'}</div><div class="ev-map"></div></div>`
     : html`<p class="missing">Энэ үеийн GPS бичлэг хадгалагдаагүй (дэлгэрэнгүй бичлэгийг ${Math.round((e.keepHours || 1464) / 24)} хоног хадгалдаг) — график, газрын зураг гаргах боломжгүй. Дээрх тоо анхааруулга илэрсэн үеийн хэмжилтээс.</p>`}
     ${a.detail ? html`<p class="detail"><span>Системийн тайлбар:</span> ${a.detail}</p>` : ''}
@@ -224,7 +237,7 @@ function incidentPage(e, i, n) {
 
 // ---------------------------------------------------------------- chart + map
 function drawChart(host, e) {
-  const chart = new FuelChart(host, { fuelHeight: 150 });
+  const chart = new FuelChart(host, { fuelHeight: 150, levels: false }); // the meter only: no averaged line
   chart.setData({
     samples: e.samples, levels: e.levels, alerts: e.alerts, from: e.from, to: e.to,
     cal: normCal(e.cal), th: e.th || {}, hasFuel: e.vehicle.hasFuel, sensorOk: true, typeLabel,

@@ -157,6 +157,22 @@ export function fuelAmount(dmv, cal, litres) {
   return { main: `${fmtNum(pct, 1)}%`, sub: `${fmtNum(Math.abs(dmv))} мВ` };
 }
 
+// ---------- fuel meter check of a theft alert (src/meter.js) ----------
+/** Verdicts where the fuel meter itself shows the loss: only these count as theft evidence. */
+export const METER_CONFIRMS = new Set(['drop', 'short', 'norefuel']);
+export const METER_LABEL = {
+  drop: 'Тоолуур буурсан',
+  short: 'Тоолуур баримтаас бага өссөн',
+  norefuel: 'Тоолуурт цэнэглэлт харагдаагүй',
+  refuel: 'Тоолуур өссөн: цэнэглэлт, хулгай биш',
+  recovered: 'Тоолуур буураад буцаж өссөн: алдагдал биш',
+  no_drop: 'Тоолуур ийм хэмжээгээр буураагүй',
+  full: 'Баримтын түлш саванд орсон',
+  sensor: 'Мэдрэгчийн гэмтэл: заалт найдваргүй',
+  nodata: 'Зогсож байх үеийн заалт хангалтгүй',
+};
+export const meterConfirms = (m) => !!m && METER_CONFIRMS.has(m.verdict);
+
 // ---------- API ----------
 export class ApiError extends Error {
   constructor(msg, status) { super(msg); this.status = status; }

@@ -25,17 +25,23 @@ events trigger notifications.
 
 ## The dashboard
 
-- **Fleet** – every vehicle with its status (moving / idle / parked / offline), fuel level and
-  open alerts. Click a vehicle for its fuel chart, route and alert history.
+- **Fleet** – every vehicle with its status (moving / idle / parked / offline), GPS tracker,
+  fuel level and open alerts. A panel on top counts the GPS trackers and fuel sensors that work,
+  are broken (and why: no signal, a reading that never moves while driving, stuck at the 10 V
+  limit, more than a full tank) or could not be checked; each number filters the list. Click a
+  vehicle for its fuel chart, route and alert history.
 - **Map** – where every vehicle is now.
 - **Alerts** – everything that was detected, newest first. Acknowledge alerts once you have
   looked at them.
 - **Evidence** (Нотлох баримт) – fuel drains and receipts the tank does not account for, picked
   by vehicle, group, dates and tick boxes, then printed together (or saved as one PDF): a
   summary page, then one A4 page per incident with the fuel chart around it, the route on a
-  map, the levels before and after, what the truck did meanwhile (driving, engine, power cut),
-  the fuel receipts of those days and lines for the driver's explanation and signatures. Each
-  theft alert also has its own "Нотлох баримт" button. The map tiles come from OpenStreetMap.
+  map, the fuel meter's own readings before and after, what the truck did meanwhile (driving,
+  engine, power cut), the fuel receipts of those days and lines for the driver's explanation
+  and signatures. Only incidents the fuel meter itself confirms are listed by default: a meter
+  that went up (a refuel), dipped and came back, or has a broken sensor is set aside, not shown
+  as theft. Each theft alert also has its own "Нотлох баримт" button. The map tiles come from
+  OpenStreetMap.
 - **Report** – distance, engine hours and fuel used per vehicle for a period, and the Excel
   fuel ledger (below).
 - **Settings** – alert thresholds, notifications, tank calibration, muting vehicles.

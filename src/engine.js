@@ -4,8 +4,9 @@
 import { DEFAULT_THRESHOLDS, DEFAULT_CALIBRATION, CHECK_MIN_MINUTES, CHECK_MAX_MINUTES, clampCheckMinutes } from './config.js';
 import { LEDGER_TYPES } from './db.js';
 import { ledgerEntry, litersAt, fuelPct, amountLitres, fuelEventLitres, isPendingDrain, parseExtra } from './ledger.js';
-import { gpsFault, fuelSensorState, buildFleetStatusSheets } from './fleetstatus.js';
+import { gpsFault, fuelSensorState, fuelFaultInfo, buildFleetStatusSheets } from './fleetstatus.js';
 import { validPos } from './refuelplaces.js';
+import { meterCheck, CONFIRMS, probeFault } from './meter.js';
 import { mnTitle, mnDetail, mnAlertTypes } from './mn.js';
 import {
   RECEIPTS_KEY, RECEIPTS_MAX, MISSING_MIN_L, MISSING_MIN_PCT, parseReceiptText, receiptId, refuelsFromRows, matchReceipts, receiptTotals, localMs,
@@ -1421,7 +1422,17 @@ export class Engine {
         trustedAt,
         sensorOk: typeof st?.sensorOk === 'boolean' ? st.sensorOk : null,
         rawMv: i.fuelRaw ?? null,
+        fault: null, // why the sensor is not working: { code, short, text } (fleetstatus.js FUEL_FAULT)
       };
+      if (fuel.sensorOk === false) fuel.fault = fuelFaultInfo(st?.sensorFault || 'nosignal');
+      else {
+        const pf = this.probeFaultOf(rec, now);
+        if (pf) {
+          // gives readings, but not a level: at the 10 V limit, past a full tank or stuck
+          fuel.sensorOk = false;
+          fuel.fault = fuelFaultInfo(pf.code);
+        }
+      }
     }
     const view = {
       imei: rec.imei,
@@ -1451,6 +1462,22 @@ export class Engine {
     view.gpsFault = gpsFault(view, th, now); // { code, text } | null
     view.fuelSensor = fuelSensorState(view, th, now); // 'none' | 'fault' | 'ok' | 'nodata' | 'waiting'
     return view;
+  }
+
+  /** The fuel probe's last day of raw readings checked for a broken probe that still reads
+   *  (meter.js probeFault). Cached per vehicle for 15-20 min: the list is drawn often. */
+  probeFaultOf(rec, now = Date.now()) {
+    const c = rec.probeCheck;
+    if (c && now >= c.at && now - c.at < c.ttl) return c.res;
+    let res = null;
+    try {
+      const rows = this.db.samplesRange(rec.imei, now - 24 * HOUR, now);
+      res = probeFault({ rows, cal: this.vehicleCal(rec.imei), th: this.settingsFor(rec.imei).th });
+    } catch (e) {
+      log('error', `Fuel probe check of ${rec.imei} failed:`, e);
+    }
+    rec.probeCheck = { at: now, ttl: (15 + Math.random() * 5) * MIN, res };
+    return res;
   }
 
   /** Sheets for the "Fleet status" Excel download: every vehicle's GPS tracker and fuel sensor state. */
@@ -1535,6 +1562,15 @@ export class Engine {
     } else if (row.type === 'receipt_mismatch') {
       lostL = alert.receipt.missing;
     }
+    // what the fuel meter itself shows: its readings are the levels before / after, and only a
+    // loss it confirms has litres (a refuel, a dip that came back or a sensor fault has none)
+    const meter = this.meterFor(row);
+    if (meter) {
+      const lv = (m) => (m ? { t: m.t, mv: m.mv, liters: meter.unit === 'L' ? m.v : L(m.mv) } : null);
+      if (meter.before) before = lv(meter.before);
+      if (meter.after) after = lv(meter.after);
+      lostL = CONFIRMS.has(meter.verdict) && meter.unit === 'L' && Number.isFinite(meter.lost) ? meter.lost : null;
+    }
 
     // what the vehicle did from the start of the event to its detection
     const during = rows.filter((s) => s.t >= t0 && s.t <= t);
@@ -1602,6 +1638,7 @@ export class Engine {
       before,
       after,
       lostL,
+      meter,
       receipt: row.type === 'receipt_mismatch' ? { ...receiptOf(row.extra), room: num(x.roomL) } : null,
       activity: during.length ? { samples: during.length, powerOffMs, engineOnMs, movingMs, noDataMs, maxSpeed: round(maxSpeed), distanceKm: round(gpsDistance(during) / 1000, 1) } : null,
       place,
@@ -1612,6 +1649,45 @@ export class Engine {
       tzOffsetMinutes: this.tzOffsetMin,
       generatedAt: now,
     };
+  }
+
+  /**
+   * The fuel meter's own word on a theft alert (meter.js): did the raw readings, taken while the
+   * vehicle stood still, really fall (or, for a receipt, rise by less than the receipt)? null for
+   * other alert types.
+   */
+  meterFor(row) {
+    if (!row?.imei || !(row.type === 'fuel_drain' || row.type === 'receipt_mismatch')) return null;
+    const x = parseExtra(row.extra);
+    const cal = this.vehicleCal(row.imei);
+    const th = this.settingsFor(row.imei).th;
+    const t = row.t;
+    const t0 = Number.isFinite(row.from_t) && row.from_t < t ? row.from_t : t;
+    if (row.type === 'receipt_mismatch') {
+      const r = this.receiptsStored().find((rc) => rc.id === x.receiptId);
+      const refuelSeen = Number.isFinite(row.from_t);
+      const dayOnly = !refuelSeen && !r?.time;
+      const rows = this.db.samplesRange(row.imei, t0 - 7 * HOUR, t + (dayOnly ? 31 : 7) * HOUR);
+      return meterCheck({ kind: 'receipt', rows, t0, t, receiptL: num(x.receiptL), missingL: num(x.missingL), refuelSeen, dayOnly, cal, th });
+    }
+    const kind = /between stops/i.test(row.title || '') ? 'trip' : 'parked';
+    const rows = this.db.samplesRange(row.imei, t0 - 7 * HOUR, t + 25 * HOUR);
+    const amountL = this.amountLitres(row.type, row.amount_mv, row.extra, cal);
+    return meterCheck({ kind, rows, t0, t, amountL, amountMv: num(row.amount_mv), fromMv: num(x.fromMv), toMv: num(x.toMv), cal, th });
+  }
+
+  /** The meter check of each theft alert in a list (the Evidence view's list), in place. */
+  withMeter(alerts) {
+    for (const a of alerts) {
+      if (a.type !== 'fuel_drain' && a.type !== 'receipt_mismatch') continue;
+      try {
+        const m = this.meterFor(this.db.getAlert(a.id));
+        a.meter = m && { verdict: m.verdict, unit: m.unit, lost: m.lost ?? null, before: m.before?.v ?? null, after: m.after?.v ?? null };
+      } catch (e) {
+        log('error', `Meter check of alert ${a.id} failed:`, e);
+      }
+    }
+    return alerts;
   }
 
   /** receiptResults, reused for 30 s (an evidence pack asks for it once per page) unless the

@@ -1,6 +1,7 @@
 // Fuel chart: hand-written SVG. Two panels sharing one time axis (no dual y-axes):
-//   1. Fuel: raw readings (faint line), trusted settled levels (bright bold line + dots), alert markers,
-//      shaded periods where the sensor gave no valid reading while powered.
+//   1. Fuel: the fuel meter's own readings (bright bold line: what the sensor sent, not averaged),
+//      the detector's settled levels (thin dashed line; opts.levels === false leaves it out),
+//      alert markers, shaded periods where the sensor gave no valid reading while powered.
 //   2. Activity band: speed area, engine (ignition) strip, tracker power strip.
 // Crosshair tooltip on hover/tap, drag (mouse) to zoom, double-click to reset.
 import { fmtFull, fmtDayShort, fmtClock, fmtNum, mvToPct, isNum, fuelAmount } from './util.js';
@@ -267,7 +268,20 @@ export class FuelChart {
     }
     parts.push(`<g clip-path="url(#${uid}-clip)">${bandParts.join('')}`);
 
-    // Raw readings: faint line, broken at invalid readings and data gaps
+    // Settled levels (the detector's view): a thin dashed line behind the meter
+    const showLevels = this.opts.levels !== false;
+    let lvPath = '';
+    if (showLevels) {
+      for (let i = l0; i < l1; i++) {
+        const [t, mv] = L[i];
+        lvPath += `${i === l0 ? 'M' : 'L'}${r1(sx(t))} ${r1(fy(u.of(mv)))}`;
+      }
+    }
+    const fault = d.sensorOk === false; // stuck/faulty sensor: its readings are not reliable
+    if (lvPath) parts.push(`<path class="c-level" d="${lvPath}"/>`);
+
+    // The fuel meter: every valid reading as sent, broken at invalid readings and data gaps; a
+    // bright, thick line on a light outline so it stands clear of the grid and the shaded periods
     let rawPath = '';
     let prevT = null, pen = false;
     for (let i = i0; i < i1; i++) {
@@ -280,24 +294,8 @@ export class FuelChart {
       }
       prevT = s[0];
     }
-    if (rawPath) parts.push(`<path class="c-raw" d="${rawPath}"/>`);
-
-    // Trusted levels
-    let lvPath = '';
-    const dots = [];
-    const nVis = l1 - l0;
-    for (let i = l0; i < l1; i++) {
-      const [t, mv] = L[i];
-      const x = r1(sx(t)), y = r1(fy(u.of(mv)));
-      lvPath += `${i === l0 ? 'M' : 'L'}${x} ${y}`;
-      if (t >= v0 && t <= v1) dots.push(`<circle class="c-level-dot${d.sensorOk === false ? ' fault' : ''}" cx="${x}" cy="${y}" r="${nVis > 120 ? 2.6 : 4}"/>`);
-    }
-    const fault = d.sensorOk === false; // stuck/faulty sensor: its "levels" are not reliable
-    // the actual fuel level: a bright, thick line on a light outline, so it stands clear of the
-    // raw readings, the grid and the shaded periods behind it
-    if (lvPath) parts.push(`<path class="c-level-halo" d="${lvPath}"/><path class="c-level${fault ? ' fault' : ''}" d="${lvPath}"/>`);
+    if (rawPath) parts.push(`<path class="c-raw-halo" d="${rawPath}"/><path class="c-raw${fault ? ' fault' : ''}" d="${rawPath}"/>`);
     if (fault && !noFuel) parts.push(`<text class="c-fault" x="${mL + 8}" y="${fy0 + 16}">Мэдрэгчийн гэмтэл — заалт найдваргүй</text>`);
-    parts.push(dots.join(''));
     parts.push('</g>');
 
     // Activity band
@@ -334,8 +332,8 @@ export class FuelChart {
 
     // Interaction overlay (below markers)
     parts.push(`<line class="c-cross" x1="0" x2="0" y1="${fy0}" y2="${py1}" visibility="hidden"/>`);
-    parts.push(`<circle class="c-cross-raw" r="3.5" cx="0" cy="0" visibility="hidden"/>`);
-    parts.push(`<circle class="c-cross-lv" r="6" cx="0" cy="0" visibility="hidden"/>`);
+    parts.push(`<circle class="c-cross-lv" r="3.5" cx="0" cy="0" visibility="hidden"/>`);
+    parts.push(`<circle class="c-cross-raw" r="6" cx="0" cy="0" visibility="hidden"/>`);
     parts.push(`<rect class="c-brush" x="0" y="${fy0}" width="0" height="${py1 - fy0}" visibility="hidden"/>`);
     parts.push(`<rect class="c-overlay" x="${mL}" y="${fy0}" width="${plotW}" height="${py1 - fy0}"/>`);
 
@@ -360,10 +358,10 @@ export class FuelChart {
     });
     parts.push(mk.join(''));
 
-    const aria = `Түлшний түвшний график, ${fmtFull(v0)} – ${fmtFull(v1)}. Найдвартай заалт: ${l1 - l0}, анхааруулга: ${visAlerts.length}.`;
+    const aria = `Түлшний тоолуурын график, ${fmtFull(v0)} – ${fmtFull(v1)}. Тоолуурын заалт: ${Math.max(0, i1 - i0)}, анхааруулга: ${visAlerts.length}.`;
     this.wrap.innerHTML = `<svg class="fchart-el" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="group" aria-label="${aria.replace(/"/g, '')}">${parts.join('')}</svg>`;
     const svg = this.wrap.firstChild;
-    this.geo = { W, H, mL, mR, plotW, fy0, fy1, py1, sx, fy, u, v0, v1, i0, i1, sensorMin, powerCut };
+    this.geo = { W, H, mL, mR, plotW, fy0, fy1, py1, sx, fy, u, v0, v1, i0, i1, sensorMin, powerCut, showLevels };
     this.bind(svg);
   }
 
@@ -402,7 +400,7 @@ export class FuelChart {
       } else crossRaw.setAttribute('visibility', 'hidden');
       // trusted level: last one at or before tt
       const li = bisect(L, tt + 1) - 1;
-      const lv = li >= 0 ? L[li] : null;
+      const lv = g.showLevels && li >= 0 ? L[li] : null;
       if (lv && lv[0] >= g.v0) {
         crossLv.setAttribute('cx', g.sx(lv[0])); crossLv.setAttribute('cy', g.fy(g.u.of(lv[1]))); crossLv.setAttribute('visibility', 'visible');
       } else crossLv.setAttribute('visibility', 'hidden');
@@ -410,11 +408,13 @@ export class FuelChart {
       const rows = [];
       const fmtU = (mv) => `${fmtNum(g.u.of(mv), g.u.name === 'L' ? 0 : 1)}${g.u.name === 'L' ? ' л' : '%'}`;
       rows.push(['time', fmtFull(tt)]);
-      if (lv) rows.push(['Найдвартай түвшин', `${fmtU(lv[1])}`, `хэмжсэн ${fmtClock(lv[0])}${new Date(lv[0]).toDateString() !== new Date(tt).toDateString() ? ' ' + fmtDayShort(lv[0]) : ''} · ${fmtNum(lv[1])} мВ`, 'lv']);
       if (s) {
-        if (rawValid) rows.push(['Түүхий заалт', fmtU(s[1]), `${fmtNum(s[1])} мВ${s[2] > 3 ? ' · явж байгаа, найдваргүй' : ''}`, 'raw']);
-        else if (s[4] !== null && s[4] < g.powerCut) rows.push(['Түүхий заалт', 'Тэжээл унтраастай', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
-        else rows.push(['Түүхий заалт', 'Хүчинтэй заалт алга', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
+        if (rawValid) rows.push(['Тоолуурын заалт', fmtU(s[1]), `${fmtNum(s[1])} мВ${s[2] > 3 ? ' · явж байгаа, савлана' : ''}`, 'raw']);
+        else if (s[4] !== null && s[4] < g.powerCut) rows.push(['Тоолуурын заалт', 'Тэжээл унтраастай', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
+        else rows.push(['Тоолуурын заалт', 'Хүчинтэй заалт алга', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
+      }
+      if (lv) rows.push(['Тогтсон түвшин', `${fmtU(lv[1])}`, `хэмжсэн ${fmtClock(lv[0])}${new Date(lv[0]).toDateString() !== new Date(tt).toDateString() ? ' ' + fmtDayShort(lv[0]) : ''} · ${fmtNum(lv[1])} мВ`, 'lv']);
+      if (s) {
         rows.push(['Хурд', s[2] !== null ? `${fmtNum(s[2])} км/ц` : '—']);
         rows.push(['Хөдөлгүүр', s[3] === 1 ? 'Асаалттай' : s[3] === 0 ? 'Унтраастай' : '—']);
         rows.push(['Тэжээл', s[4] !== null ? `${fmtNum(s[4] / 1000, 1)} В` : '—']);

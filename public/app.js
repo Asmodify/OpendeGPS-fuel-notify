@@ -3,7 +3,7 @@
 import {
   html, raw, esc, setHTML, icon, $, $$, fmtTime, fmtFull, fmtRel, fmtDur, fmtDayHeading, dayKey,
   fmtNum, clamp, isNum, toMs, normCal, mvToPct, dMvToL, dMvToPct, fuelAmount, api, loadPref, savePref,
-  debounce, downloadText, csvCell, onLoginRequired,
+  debounce, downloadText, csvCell, onLoginRequired, METER_LABEL, meterConfirms,
 } from './util.js';
 import { FuelChart } from './chart.js';
 
@@ -104,7 +104,7 @@ const S = {
   conn: 'connecting',
   es: null,
   sseDropped: false,
-  fleet: { q: '', group: '', status: '', fuel: false, problems: false, gps: false, sort: 'alerts', dir: -1, ...pick(loadPref('fleet', {}), ['group', 'status', 'fuel', 'problems', 'gps', 'sort', 'dir']) },
+  fleet: savedFleetFilters(),
   map: { filter: loadPref('mapFilter', 'all'), names: loadPref('mapNames', false) },
   alerts: {
     list: [], loading: false, error: null, hasMore: false, loaded: false, newIds: new Set(),
@@ -121,6 +121,13 @@ const S = {
 };
 function savedAlertFilters() {
   return { sev: [...SEVS], type: '', imei: '', range: 72, unacked: false, ...pick(loadPref('alertFilters', {}), ['sev', 'type', 'imei', 'range', 'unacked']) };
+}
+/** equip: '' or an EQUIP_FILTER key (GPS tracker / fuel sensor working or not). Older saved
+ *  filters had two tick boxes: "with a fuel sensor" and "GPS not working". */
+function savedFleetFilters() {
+  const p = loadPref('fleet', {});
+  const old = p && p.equip === undefined ? (p.gps ? 'gps-bad' : p.fuel ? 'fuel-any' : '') : '';
+  return { q: '', group: '', status: '', equip: old, problems: false, sort: 'alerts', dir: -1, ...pick(p, ['group', 'status', 'equip', 'problems', 'sort', 'dir']) };
 }
 function pick(o, keys) {
   const out = {};
@@ -185,6 +192,26 @@ function gpsFault(v) {
   if (g.code === 'silent' && v.lastSeen) return `${fmtDur(now() - v.lastSeen)} мэдээлэлгүй`; // kept current between refreshes
   return g.text || 'Ажиллахгүй';
 }
+/** Is the fuel sensor working: 'ok', 'bad' (no signal, frozen, stuck at 10 V, past a full tank),
+ *  'unchecked' (the tracker is silent, or no steady reading yet) or 'none' (not fitted).
+ *  The server judges it (src/fleetstatus.js fuelSensorState), the same as in the Excel. */
+function fuelEquip(v) {
+  if (!v.hasFuel) return 'none';
+  if (v.fuel?.sensorOk === false || v.fuelSensor === 'fault') return 'bad';
+  if (v.fuelSensor === 'ok') return 'ok';
+  if (v.fuelSensor === 'nodata' || v.fuelSensor === 'waiting') return 'unchecked';
+  return fuelPct(v) !== null ? 'ok' : 'unchecked';
+}
+const EQUIP_FILTER = {
+  'gps-ok': { label: 'GPS ажиллаж байна', pass: (v) => !gpsFault(v) },
+  'gps-bad': { label: 'GPS ажиллахгүй', pass: (v) => !!gpsFault(v) },
+  'fuel-ok': { label: 'Түлшний мэдрэгч ажиллаж байна', pass: (v) => fuelEquip(v) === 'ok' },
+  'fuel-bad': { label: 'Түлшний мэдрэгч гэмтэлтэй', pass: (v) => fuelEquip(v) === 'bad' },
+  'fuel-unchecked': { label: 'Түлшний мэдрэгч шалгагдаагүй', pass: (v) => fuelEquip(v) === 'unchecked' },
+  'fuel-none': { label: 'Түлшний мэдрэгчгүй', pass: (v) => fuelEquip(v) === 'none' },
+  'fuel-any': { label: 'Түлшний мэдрэгчтэй', pass: (v) => v.hasFuel },
+};
+const GPS_WHY = { silent: '6+ цаг мэдээлэлгүй', never: 'Хэзээ ч мэдээлээгүй', nofix: 'Байршилгүй мэдээлдэг', nopower: 'Тэжээлгүй явж байна' };
 const topSev = (v) => (v.activeAlerts.critical > 0 ? 'critical' : v.activeAlerts.warning > 0 ? 'warning' : null);
 const problemScore = (v) => (v.activeAlerts.critical || 0) * 1e6 + (v.activeAlerts.warning || 0) * 1e3 + (v.hasFuel && v.fuel?.sensorOk === false ? 1 : 0);
 
@@ -227,7 +254,8 @@ function fuelCell(v) {
   const f = v.fuel;
   const fs = fuelState(v);
   if (fs === 'fault') {
-    return html`<div class="gauge nosig" title="Түлшний мэдрэгч хүчинтэй заалт өгөхгүй байна — салсан эсвэл эвдэрсэн байж болзошгүй."><span class="gbar"><i></i></span><span class="gtxt"><b>Дохиогүй</b><small>мэдрэгчийн гэмтэл</small></span></div>`;
+    const why = v.fuel?.fault;
+    return html`<div class="gauge nosig" title="${why?.text || 'Түлшний мэдрэгч хүчинтэй заалт өгөхгүй байна: салсан эсвэл эвдэрсэн байж болзошгүй.'}"><span class="gbar"><i></i></span><span class="gtxt"><b>Гэмтэлтэй</b><small>${why?.short || 'дохиогүй'}</small></span></div>`;
   }
   if (fs === 'offline') {
     return html`<div class="gauge wait" title="${v.lastSeen ? `${fmtFull(v.lastSeen)}-с хойш мэдээлэл алга` : 'Энэ машинаас мэдээлэл ирээгүй'}"><span class="gbar"></span><span class="gtxt"><span class="muted">Мэдээлэл алга</span><small>${v.lastSeen ? `${fmtTime(v.lastSeen, now())}-с хойш` : 'холбогдоогүй'}</small></span></div>`;
@@ -856,12 +884,13 @@ const SORTERS = {
   name: (a, b) => a.shortName.localeCompare(b.shortName, undefined, { numeric: true }),
   group: (a, b) => groupLabel(a.group).localeCompare(groupLabel(b.group)),
   status: (a, b) => STATUS[a.status].order - STATUS[b.status].order,
+  gps: (a, b) => (gpsFault(a) ? 1 : 0) - (gpsFault(b) ? 1 : 0),
   fuel: (a, b) => fuelSortVal(a) - fuelSortVal(b),
   speed: (a, b) => (a.status === 'offline' ? -1 : a.speed ?? -1) - (b.status === 'offline' ? -1 : b.speed ?? -1),
   seen: (a, b) => (a.lastSeen ?? 0) - (b.lastSeen ?? 0),
   alerts: (a, b) => problemScore(a) - problemScore(b),
 };
-const SORT_DEFAULT_DIR = { name: 1, group: 1, status: 1, fuel: 1, speed: -1, seen: -1, alerts: -1 };
+const SORT_DEFAULT_DIR = { name: 1, group: 1, status: 1, gps: -1, fuel: 1, speed: -1, seen: -1, alerts: -1 };
 function fuelSortVal(v) {
   if (!v.hasFuel) return -300;
   if (v.fuel?.sensorOk === false) return -100;
@@ -874,31 +903,59 @@ function fleetFiltered() {
   return S.vehicles.filter((v) => (!q || v._search.includes(q))
     && (!f.group || groupKey(v.group) === f.group)
     && (!f.status || v.status === f.status)
-    && (!f.fuel || v.hasFuel)
-    && (!f.problems || hasProblem(v))
-    && (!f.gps || gpsFault(v) !== null));
+    && (!f.equip || !EQUIP_FILTER[f.equip] || EQUIP_FILTER[f.equip].pass(v))
+    && (!f.problems || hasProblem(v)));
 }
 function renderFleetTiles() {
-  const c = { moving: 0, idle: 0, parked: 0, offline: 0, fuel: 0, problems: 0, nosig: 0, gps: 0 };
+  const c = { moving: 0, idle: 0, parked: 0, offline: 0, problems: 0 };
   for (const v of S.vehicles) {
     c[v.status]++;
-    if (v.hasFuel) c.fuel++;
     if (hasProblem(v)) c.problems++;
-    if (gpsFault(v)) c.gps++;
   }
   const f = S.fleet;
   const tile = (key, label, n, cls, pressed, hint) => html`<button type="button" class="tile ${cls}" data-tile="${key}" aria-pressed="${pressed ? 'true' : 'false'}" title="${hint}">
       <span class="t-num">${fmtNum(n)}</span><span class="t-lab">${label}</span></button>`;
   setHTML($('#fleet-tiles'), html`
-    ${tile('all', 'Машин', S.vehicles.length, 't-all', !f.status && !f.fuel && !f.problems && !f.gps, 'Бүх машиныг харуулах')}
+    ${tile('all', 'Машин', S.vehicles.length, 't-all', !f.status && !f.equip && !f.problems, 'Бүх машиныг харуулах')}
     ${tile('problems', 'Анхаарах', c.problems, c.problems ? 't-problems hot' : 't-problems', f.problems, 'Танилцаагүй ноцтой/сэрэмжлүүлэг анхааруулгатай эсвэл түлшний мэдрэгч нь гэмтэлтэй машин')}
-    ${tile('gps', 'GPS гэмтэл', c.gps, c.gps ? 't-gps hot' : 't-gps', f.gps, 'GPS трекер ажиллахгүй: 6 цаг ба түүнээс удаан мэдээлэлгүй, байршилгүй мэдээлж байгаа, эсвэл машины тэжээлгүйгээр явж байгаа')}
     ${tile('moving', 'Явж байна', c.moving, 'st-moving', f.status === 'moving', 'Одоо явж байгаа')}
     ${tile('idle', 'Асаалттай зогссон', c.idle, 'st-idle', f.status === 'idle', 'Хөдөлгүүр ажиллаж байгаа ч хөдлөхгүй')}
     ${tile('parked', 'Зогсоолд', c.parked, 'st-parked', f.status === 'parked', 'Хөдөлгүүр унтраастай')}
     ${tile('offline', 'Холбогдоогүй', c.offline, 'st-offline', f.status === 'offline', 'Мэдээлэл ирэхгүй байна')}
-    ${tile('fuel', 'Түлшний мэдрэгчтэй', c.fuel, 't-fuel', f.fuel, 'Түлшний түвшний мэдрэгчтэй машин')}
   `);
+  renderFleetEquip();
+}
+/** Equipment: how many GPS trackers and fuel sensors work, are broken (and why) or could not be
+ *  checked. Each number filters the list below. */
+function renderFleetEquip() {
+  const n = Object.fromEntries(Object.keys(EQUIP_FILTER).map((k) => [k, 0]));
+  const gpsWhy = new Map();
+  const fuelWhy = new Map();
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  for (const v of S.vehicles) {
+    for (const [k, e] of Object.entries(EQUIP_FILTER)) if (e.pass(v)) n[k]++;
+    if (v.gpsFault) bump(gpsWhy, GPS_WHY[v.gpsFault.code] || 'Ажиллахгүй');
+    if (fuelEquip(v) === 'bad') bump(fuelWhy, v.fuel?.fault?.short || 'Дохиогүй');
+  }
+  const on = S.fleet.equip;
+  const num = (key, tone, hint) => (n[key]
+    ? html`<button type="button" class="eq-n ${tone}" data-equip="${key}" aria-pressed="${on === key ? 'true' : 'false'}" title="${hint}">${fmtNum(n[key])}</button>`
+    : html`<span class="eq-n zero">0</span>`);
+  const why = (m) => (m.size ? html`<div class="eq-why">${[...m].sort((a, b) => b[1] - a[1]).map(([k, c]) => html`<span>${k}: <b>${fmtNum(c)}</b></span>`)}</div>` : '');
+  const cap = (t) => html`<span class="eq-cap">${t}</span>`; // the column's name on phones, where the header row is hidden
+  setHTML($('#fleet-equip-body'), html`<table class="eq-tbl">
+    <thead><tr><th></th><th>Ажиллаж байна</th><th>Гэмтэлтэй</th><th title="Трекер мэдээлэл илгээхгүй тул мэдрэгчийг харах боломжгүй, эсвэл машин тогтвортой заалт авах хангалттай удаан зогсоогүй">Шалгагдаагүй</th><th>Суулгаагүй</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">GPS трекер</th>
+        <td>${cap('Ажиллаж байна')}${num('gps-ok', 'good', 'GPS трекер нь ажиллаж байгаа машинууд')}</td>
+        <td class="eq-bad">${cap('Ажиллахгүй')}${num('gps-bad', 'bad', 'GPS трекер ажиллахгүй: 6 цаг ба түүнээс удаан мэдээлэлгүй, байршилгүй мэдээлдэг, эсвэл машины тэжээлгүй явж байгаа')}${why(gpsWhy)}</td>
+        <td class="na">—</td><td class="na">—</td></tr>
+      <tr><th scope="row">Түлшний мэдрэгч</th>
+        <td>${cap('Ажиллаж байна')}${num('fuel-ok', 'good', 'Түлшний мэдрэгч нь түвшин зөв заадаг машинууд')}</td>
+        <td class="eq-bad">${cap('Гэмтэлтэй')}${num('fuel-bad', 'bad', 'Түлшний мэдрэгч гэмтэлтэй: дохиогүй, заалт нь хөдлөхгүй, 10 В-д гацсан, эсвэл савнаас их заадаг')}${why(fuelWhy)}</td>
+        <td>${cap('Шалгагдаагүй')}${num('fuel-unchecked', 'warn', 'Трекер мэдээлэл илгээхгүй, эсвэл тогтвортой заалт хараахан алга')}</td>
+        <td>${cap('Суулгаагүй')}${num('fuel-none', 'mute', 'Түлшний мэдрэгч суулгаагүй машинууд')}</td></tr>
+    </tbody></table>`);
 }
 function renderFleet() {
   renderFleetTiles();
@@ -937,7 +994,8 @@ function renderFleet() {
     return html`<tr data-imei="${v.imei}" tabindex="0" class="${sev ? 'sev-' + sev : ''}${v.status === 'offline' ? ' is-off' : ''}">
       <td class="c-name"><div class="vname">${v.shortName}</div><div class="vsub"><span class="d-only">${[v.plate, v.device].filter(Boolean).join(' · ')}</span><span class="m-only"><span class="st-txt st-${v.status}">${STATUS[v.status].label}</span> · ${relSpan(v.lastSeen)}</span></div>${gf ? html`<div class="vsub gps-bad m-only">GPS: ${gf}</div>` : ''}</td>
       <td class="c-group">${groupLabel(v.group)}</td>
-      <td class="c-status">${statusPill(v)}${gf ? html`<div class="vsub gps-bad">GPS: ${gf}</div>` : ''}</td>
+      <td class="c-status">${statusPill(v)}</td>
+      <td class="c-gps">${gf ? html`<span class="eq-txt bad">Ажиллахгүй</span><div class="vsub">${gf}</div>` : html`<span class="eq-txt ok">Ажиллаж байна</span>`}</td>
       <td class="c-fuel">${fuelCell(v)}</td>
       <td class="c-speed num">${v.status === 'offline' || v.speed === null ? html`<span class="muted">—</span>` : `${fmtNum(v.speed)} км/ц`}</td>
       <td class="c-seen">${relSpan(v.lastSeen)}${v.lastSeen && t - v.lastSeen > 30 * 864e5 ? html`<div class="vsub">${fmtTime(v.lastSeen, t)}</div>` : ''}</td>
@@ -1313,25 +1371,36 @@ async function ackAll() {
 // Theft alerts (fuel drains, receipts the tank does not account for) picked by truck, group,
 // dates and tick boxes, then printed as one evidence pack: evidence.html opens in a new tab
 // with a summary page and one A4 page per alert. Everything shown is ticked; S.evidence.off
-// holds the ones unticked.
+// holds the ones unticked. Each alert carries the fuel meter's own check (a.meter): only those
+// the meter confirms are listed and counted; refuels, dips that came back and sensor faults are
+// hidden behind a toggle and never ticked by default.
 const EV_TYPES = ['fuel_drain', 'receipt_mismatch'];
+const EV_DEFAULT_TYPES = ['fuel_drain']; // receipt gaps are refuel shortfalls, not drains: opt in
 const EV_PRINT_MAX = 300; // pages one pack may hold (each loads its own chart and map)
 const EV_XLSX_MAX = 2000; // = ALERT_IDS_MAX on the server
 const isTheft = (a) => a.type === 'receipt_mismatch' || (a.type === 'fuel_drain' && !a.pending && a.severity !== 'info');
-const lostLitres = (a) => (a.type === 'receipt_mismatch' ? (isNum(a.receipt?.missing) ? Number(a.receipt.missing) : null) : isNum(a.amountL) ? Number(a.amountL) : null);
+const lostLitres = (a) => {
+  if (a.meter) return meterConfirms(a.meter) && isNum(a.meter.lost) ? Number(a.meter.lost) : null;
+  return a.type === 'receipt_mismatch' ? (isNum(a.receipt?.missing) ? Number(a.receipt.missing) : null) : isNum(a.amountL) ? Number(a.amountL) : null;
+};
+const meterText = (m) => {
+  if (!m) return '';
+  const lv = isNum(m.before) && isNum(m.after) && m.unit === 'L' ? ` · ${fmtNum(m.before, 0)} → ${fmtNum(m.after, 0)} л` : '';
+  return `${METER_LABEL[m.verdict] || m.verdict}${lv}`;
+};
 const p2d = (n) => String(n).padStart(2, '0');
 const isoDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${p2d(d.getMonth() + 1)}-${p2d(d.getDate())}`; };
 const dayStartMs = (day) => new Date(`${day}T00:00:00`).getTime();
 const evidenceUrl = (ids) => `evidence.html#ids=${ids.join(',')}`;
 function evDefaults() {
-  const saved = pick(loadPref('evidenceFilters', {}), ['imei', 'group', 'types', 'verdict', 'minL', 'days']);
+  const saved = pick(loadPref('evidenceFilters.v2', {}), ['imei', 'group', 'types', 'verdict', 'minL', 'days']);
   const days = [7, 30, 90].includes(saved.days) ? saved.days : 30;
   const to = isoDay(now());
-  return { imei: '', group: '', types: [...EV_TYPES], verdict: 'nofalse', minL: 0, ...saved, days, from: isoDay(now() - (days - 1) * 24 * HOUR), to };
+  return { imei: '', group: '', types: [...EV_DEFAULT_TYPES], verdict: 'nofalse', minL: 0, ...saved, days, from: isoDay(now() - (days - 1) * 24 * HOUR), to, unconfirmed: false };
 }
 function saveEvFilters() {
   const { imei, group, types, verdict, minL, days } = S.evidence.f;
-  savePref('evidenceFilters', { imei, group, types, verdict, minL, days });
+  savePref('evidenceFilters.v2', { imei, group, types, verdict, minL, days });
 }
 function syncEvControls() {
   const f = S.evidence.f;
@@ -1358,7 +1427,7 @@ async function loadEvidence() {
   const f = st.f;
   st.off.clear();
   if (!f.types.length || !f.from || !f.to) { st.list = []; st.loaded = true; renderEvidence(); return; }
-  const p = new URLSearchParams({ type: f.types.join(','), limit: '5000' });
+  const p = new URLSearchParams({ type: f.types.join(','), limit: '5000', meter: '1' });
   if (f.imei) p.set('imei', f.imei);
   p.set('since', String(dayStartMs(f.from)));
   p.set('until', String(dayStartMs(f.to) + 24 * HOUR - 1));
@@ -1370,6 +1439,8 @@ async function loadEvidence() {
     const data = await api('/api/alerts?' + p.toString());
     if (req !== evReq) return;
     st.list = (Array.isArray(data) ? data : []).map(normAlert).filter(isTheft);
+    // what the meter does not confirm stays unticked, even when shown
+    st.off = new Set(st.list.filter((a) => !meterConfirms(a.meter)).map((a) => a.id));
     st.limited = Array.isArray(data) && data.length >= 5000;
     st.error = null;
     st.loaded = true;
@@ -1385,15 +1456,17 @@ async function loadEvidence() {
     }
   }
 }
-/** The loaded alerts the group / verdict / litres filters let through, by truck, oldest first. */
-function evShown() {
+/** The loaded alerts the group / verdict / litres filters let through, by truck, oldest first;
+ *  without `all`, only those the fuel meter confirms (unless "show the rest" is on). */
+function evShown(all = false) {
   const f = S.evidence.f;
   const min = Number(f.minL) || 0;
   return S.evidence.list.filter((a) => {
+    if (!all && !f.unconfirmed && !meterConfirms(a.meter)) return false;
     if (f.group && groupKey(a.group ?? S.byImei.get(a.imei)?.group) !== f.group) return false;
     if (f.verdict === 'nofalse' && a.verdict === 'false_alarm') return false;
     if (f.verdict === 'confirmed' && a.verdict !== 'confirmed') return false;
-    if (min > 0 && !((lostLitres(a) ?? 0) >= min)) return false;
+    if (min > 0 && meterConfirms(a.meter) && !((lostLitres(a) ?? 0) >= min)) return false;
     return true;
   }).sort((a, b) => aName(a).localeCompare(aName(b), undefined, { numeric: true }) || (a.t ?? 0) - (b.t ?? 0));
 }
@@ -1415,35 +1488,46 @@ function renderEvidence() {
   // per-truck chips: how much each lost; a click ticks only that truck
   setHTML($('#e-trucks'), trucks.size > 1 ? html`${[...trucks.values()].sort((a, b) => b.litres - a.litres).map((g) => html`<button type="button" class="e-truck${g.on === g.items.length ? ' all' : g.on ? ' some' : ''}" data-only="${g.imei}" title="Зөвхөн энэ машиныг сонгох">
       <b>${g.name}</b><span>${g.items.length} удаа · ${litresText(g.litres)}</span></button>`)}` : '');
-  if (!st.f.types.length) setHTML(el, emptyState('info', 'Дор хаяж нэг төрөл сонгоно уу', 'Дээрх “Түлш алдагдал” / “Баримт зөрсөн” товчийг ашиглана уу.'));
+  // what the meter does not confirm (refuels, dips that came back, sensor faults): a count and a toggle
+  const hidden = st.f.unconfirmed ? [] : evShown(true).filter((a) => !meterConfirms(a.meter));
+  const why = {};
+  for (const a of hidden) { const k = a.meter?.verdict || 'nodata'; why[k] = (why[k] || 0) + 1; }
+  const unconf = evShown().filter((a) => !meterConfirms(a.meter)).length;
+  const hiddenNote = hidden.length
+    ? html`<p class="help e-help e-hidden">${icon('info')} Тоолуур батлаагүй <b>${hidden.length}</b> тохиолдлыг харуулаагүй: ${Object.entries(why).map(([k, n]) => `${METER_LABEL[k] || k} ${n}`).join(', ')}. <button type="button" class="btn small" id="e-show-unconf">Харуулах</button></p>`
+    : st.f.unconfirmed && unconf ? html`<p class="help e-help e-hidden">${icon('info')} Тоолуур батлаагүй ${unconf} тохиолдлыг саарлаар харуулж байна; тэд сонгогдоогүй, нийтэд орохгүй. <button type="button" class="btn small" id="e-show-unconf">Нуух</button></p>` : '';
+  if (!st.f.types.length) setHTML(el, emptyState('info', 'Дор хаяж нэг төрөл сонгоно уу', 'Дээрх “Түлш алдагдал” / “Баримтаас дутуу цэнэглэлт” товчийг ашиглана уу.'));
   else if (!shown.length) {
     if (st.loading || !st.loaded) setHTML(el, html`<div class="empty"><span class="spinner"></span><b>Ачаалж байна…</b></div>`);
     else if (st.error) setHTML(el, emptyState('wifi-off', 'Ачаалж чадсангүй', st.error, { id: 'retry-evidence', label: 'Дахин оролдох' }));
-    else setHTML(el, emptyState('check', 'Хулгайн анхааруулга алга', 'Энэ хугацаанд шүүлтүүрт тохирох түлш алдагдал, баримтын зөрүү гараагүй.'));
+    else setHTML(el, html`${emptyState('check', 'Тоолуураар батлагдсан хулгай алга', 'Энэ хугацаанд түлшний тоолуур буурсан тохиолдол шүүлтүүрт тохирсонгүй.')}${hiddenNote}`);
   } else {
     const allOn = shown.every((a) => !st.off.has(a.id));
     const someOn = shown.some((a) => !st.off.has(a.id));
     setHTML(el, html`<table class="tbl e-tbl">
       <thead><tr>
         <th class="e-chk"><label class="e-chk-lab"><input type="checkbox" class="js-ev-all"${raw(allOn ? ' checked' : '')}${raw(!allOn && someOn ? ' data-mixed="1"' : '')} aria-label="Бүгдийг сонгох"></label></th>
-        <th>Машин</th><th>Огноо, цаг</th><th>Юу болсон</th><th class="num">Алдсан</th><th>Дүгнэлт</th><th class="hide-sm">Тэмдэглэл</th><th></th>
+        <th>Машин</th><th>Огноо, цаг</th><th>Юу болсон</th><th>Түлшний тоолуур</th><th class="num">Алдсан</th><th>Дүгнэлт</th><th class="hide-sm">Тэмдэглэл</th><th></th>
       </tr></thead>
       <tbody>${[...trucks.values()].map((g) => html`${trucks.size > 1 ? html`<tr class="e-group-row"><td class="e-chk"><label class="e-chk-lab"><input type="checkbox" class="js-ev-truck" data-imei="${g.imei}"${raw(g.on === g.items.length ? ' checked' : '')}${raw(g.on && g.on < g.items.length ? ' data-mixed="1"' : '')} aria-label="${g.name}: бүгдийг сонгох"></label></td>
-          <td colspan="3"><b>${g.name}</b> <span class="muted">${g.on < g.items.length ? `${g.items.length}-аас ${g.on} сонгосон` : `${g.items.length} тохиолдол`}</span></td><td class="num"><b>${litresText(g.onLitres)}</b></td><td colspan="3"></td></tr>` : ''}
+          <td colspan="4"><b>${g.name}</b> <span class="muted">${g.on < g.items.length ? `${g.items.length}-аас ${g.on} сонгосон` : `${g.items.length} тохиолдол`}</span></td><td class="num"><b>${litresText(g.onLitres)}</b></td><td colspan="3"></td></tr>` : ''}
         ${g.items.map((a) => {
     const on = !st.off.has(a.id);
     const L = lostLitres(a);
-    return html`<tr class="sev-${a.severity}${on ? '' : ' is-off'}" data-id="${a.id}">
+    const ok = meterConfirms(a.meter);
+    return html`<tr class="sev-${a.severity}${on ? '' : ' is-off'}${ok ? '' : ' e-unconf'}" data-id="${a.id}">
             <td class="e-chk"><label class="e-chk-lab"><input type="checkbox" class="js-ev" data-id="${a.id}"${raw(on ? ' checked' : '')} aria-label="Сонгох"></label></td>
             <td class="nowrap"><b>${aName(a)}</b></td>
             <td class="nowrap" title="${fmtFull(a.t)}">${fmtTime(a.t, now())}${isNum(a.fromT) && a.fromT < a.t - 60e3 ? html`<small class="muted"> · ${fmtDur(a.t - a.fromT)}</small>` : ''}</td>
             <td>${a.title || typeLabel(a.type)}</td>
+            <td class="e-meter ${ok ? 'm-ok' : 'm-no'}">${meterText(a.meter) || html`<span class="muted">—</span>`}</td>
             <td class="num nowrap rc-bad"><b>${litresText(L)}</b></td>
             <td>${a.type === 'fuel_drain' && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span>` : html`<span class="muted">${a.type === 'fuel_drain' ? 'Шалгаагүй' : '—'}</span>`}</td>
             <td class="hide-sm e-note">${a.note}</td>
             <td class="nowrap"><a class="btn small" href="${evidenceUrl([a.id])}" target="_blank" rel="noopener" title="Зөвхөн энэ тохиолдлын хуудсыг нээх">${icon('evidence')}<span class="hide-sm">Хуудас</span></a></td>
           </tr>`;
   })}`)}</tbody></table>
+      ${hiddenNote}
       ${st.limited ? html`<p class="help e-help">Хамгийн сүүлийн 5000 анхааруулгыг л ачааллаа — хугацааг богиносгоно уу.</p>` : ''}`);
     for (const c of $$('input[data-mixed]', el)) c.indeterminate = true;
   }
@@ -2107,7 +2191,7 @@ function renderDetailStats() {
   let fuelBlock;
   const fs = v.hasFuel ? fuelState(v) : null;
   if (!v.hasFuel) fuelBlock = html`<div class="big-fuel none"><span class="bf-num">—</span><span class="bf-sub">Энэ машин түлшний мэдрэгчгүй.</span></div>`;
-  else if (fs === 'fault') fuelBlock = html`<div class="big-fuel nosig"><span class="bf-num">Дохиогүй</span><span class="bf-sub">Түлшний мэдрэгч хүчинтэй заалт өгөхгүй байна (салсан, гацсан эсвэл эвдэрсэн) тул түвшинг харуулахгүй — заалт нь найдваргүй.</span></div>`;
+  else if (fs === 'fault') fuelBlock = html`<div class="big-fuel nosig"><span class="bf-num">Гэмтэлтэй</span><span class="bf-sub">${f?.fault?.text || 'Түлшний мэдрэгч хүчинтэй заалт өгөхгүй байна (салсан, гацсан эсвэл эвдэрсэн)'}. Түвшинг харуулахгүй: заалт нь найдваргүй.</span></div>`;
   else if (fs === 'offline') fuelBlock = html`<div class="big-fuel wait"><span class="bf-num">Мэдээлэл алга</span><span class="bf-sub">${v.lastSeen ? `${fmtFull(v.lastSeen)}-с хойш холбогдоогүй.` : 'Энэ машин мэдээлэл илгээгээгүй.'} Зогсоолд байхдаа дахин мэдээлэхэд түвшинг хэмжинэ.</span></div>`;
   else if (fs === 'wait') fuelBlock = html`<div class="big-fuel wait"><span class="bf-num">Хүлээж байна…</span><span class="bf-sub">Түвшинг машин зогсож байхад хэмждэг. Тогтвортой заалт хараахан алга.</span></div>`;
   else {
@@ -2388,7 +2472,7 @@ function bindStatic() {
       else if (a === 'retry-settings') renderSettings();
       else if (a === 'retry-detail') loadDetail();
       else if (a === 'clear-fleet') {
-        Object.assign(S.fleet, { q: '', group: '', status: '', fuel: false, problems: false, gps: false });
+        Object.assign(S.fleet, { q: '', group: '', status: '', equip: '', problems: false });
         syncFleetControls();
         renderFleet();
       } else if (a === 'enable-notif') requestNotif();
@@ -2413,18 +2497,23 @@ function bindStatic() {
   $('#f-q').addEventListener('input', debounce((e) => { S.fleet.q = e.target.value; renderFleet(); }, 120));
   $('#f-group').addEventListener('change', (e) => { S.fleet.group = e.target.value; saveFleet(); renderFleet(); });
   $('#f-status').addEventListener('change', (e) => { S.fleet.status = e.target.value; saveFleet(); renderFleet(); });
-  $('#f-fuel').addEventListener('change', (e) => { S.fleet.fuel = e.target.checked; saveFleet(); renderFleet(); });
+  $('#f-equip').addEventListener('change', (e) => { S.fleet.equip = e.target.value; saveFleet(); renderFleet(); });
   $('#f-problems').addEventListener('change', (e) => { S.fleet.problems = e.target.checked; saveFleet(); renderFleet(); });
-  $('#f-gps').addEventListener('change', (e) => { S.fleet.gps = e.target.checked; saveFleet(); renderFleet(); });
+  $('#fleet-equip-body').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-equip]');
+    if (!b) return;
+    S.fleet.equip = S.fleet.equip === b.dataset.equip ? '' : b.dataset.equip;
+    syncFleetControls();
+    saveFleet();
+    renderFleet();
+  });
   $('#fleet-tiles').addEventListener('click', (e) => {
     const t = e.target.closest('[data-tile]');
     if (!t) return;
     const k = t.dataset.tile;
     const f = S.fleet;
-    if (k === 'all') Object.assign(f, { status: '', fuel: false, problems: false, gps: false });
-    else if (k === 'fuel') f.fuel = !f.fuel;
+    if (k === 'all') Object.assign(f, { status: '', equip: '', problems: false });
     else if (k === 'problems') f.problems = !f.problems;
-    else if (k === 'gps') f.gps = !f.gps;
     else f.status = f.status === k ? '' : k;
     syncFleetControls();
     saveFleet();
@@ -2539,6 +2628,7 @@ function bindStatic() {
     else if (c.matches('.js-ev-all')) evToggle(evShown().map((a) => a.id), c.checked);
   });
   $('#e-list').addEventListener('click', (e) => {
+    if (e.target.closest('#e-show-unconf')) { evF().unconfirmed = !evF().unconfirmed; renderEvidence(); return; }
     if (e.target.closest('a, button, input, label')) return;
     const tr = e.target.closest('tr[data-id]');
     if (!tr) return;
@@ -2795,16 +2885,15 @@ function alertFilterChanged() {
   loadAlerts();
 }
 function saveFleet() {
-  const { group, status, fuel, problems, gps, sort, dir } = S.fleet;
-  savePref('fleet', { group, status, fuel, problems, gps, sort, dir });
+  const { group, status, equip, problems, sort, dir } = S.fleet;
+  savePref('fleet', { group, status, equip, problems, sort, dir });
 }
 function syncFleetControls() {
   $('#f-q').value = S.fleet.q;
   $('#f-group').value = S.fleet.group;
   $('#f-status').value = S.fleet.status;
-  $('#f-fuel').checked = S.fleet.fuel;
+  $('#f-equip').value = EQUIP_FILTER[S.fleet.equip] ? S.fleet.equip : '';
   $('#f-problems').checked = S.fleet.problems;
-  $('#f-gps').checked = S.fleet.gps;
 }
 function applyTheme() {
   const t = S.prefs.theme;

@@ -107,6 +107,13 @@
     <!-- FLEET -->
     <section class="view" id="view-fleet" hidden aria-label="Машинууд">
       <div class="tiles" id="fleet-tiles"></div>
+      <div class="card equip-card" id="fleet-equip">
+        <div class="equip-head">
+          <h3>GPS трекер ба түлшний мэдрэгч ажиллаж байгаа эсэх</h3>
+          <a class="btn small" id="f-xlsx" href="/api/export/fleet-status.xlsx" download title="Бүх машины Excel жагсаалт: GPS ажиллаж байгаа эсэх, түлшний мэдрэгч ажиллаж байгаа эсвэл гэмтэлтэй эсэх"><svg class="ic"><use href="#i-download"/></svg>Төлвийн Excel</a>
+        </div>
+        <div id="fleet-equip-body"></div>
+      </div>
       <div class="filters">
         <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="f-q" type="search" placeholder="Нэр, улсын дугаар, IMEI хайх…" autocomplete="off" aria-label="Машин хайх"></label>
         <select id="f-group" aria-label="Бүлэг"><option value="">Бүх бүлэг</option></select>
@@ -117,11 +124,18 @@
           <option value="parked">Зогсоолд</option>
           <option value="offline">Холбогдоогүй</option>
         </select>
-        <label class="chk"><input type="checkbox" id="f-fuel"> Түлшний мэдрэгчтэй</label>
+        <select id="f-equip" aria-label="Тоног төхөөрөмж">
+          <option value="">Бүх төхөөрөмж</option>
+          <option value="gps-ok">GPS ажиллаж байна</option>
+          <option value="gps-bad">GPS ажиллахгүй</option>
+          <option value="fuel-ok">Түлшний мэдрэгч ажиллаж байна</option>
+          <option value="fuel-bad">Түлшний мэдрэгч гэмтэлтэй</option>
+          <option value="fuel-unchecked">Түлшний мэдрэгч шалгагдаагүй</option>
+          <option value="fuel-any">Түлшний мэдрэгчтэй</option>
+          <option value="fuel-none">Түлшний мэдрэгчгүй</option>
+        </select>
         <label class="chk"><input type="checkbox" id="f-problems"> Зөвхөн асуудалтай</label>
-        <label class="chk"><input type="checkbox" id="f-gps"> GPS ажиллахгүй</label>
         <span class="filter-count" id="f-count"></span>
-        <a class="btn" id="f-xlsx" href="/api/export/fleet-status.xlsx" download title="Бүх машины Excel жагсаалт: GPS ажиллаж байгаа эсэх, түлшний мэдрэгч ажиллаж байгаа эсвэл гэмтэлтэй эсэх"><svg class="ic"><use href="#i-download"/></svg>Төлвийн Excel</a>
       </div>
       <div class="card table-card">
         <table class="tbl fleet-tbl">
@@ -130,6 +144,7 @@
               <th class="c-name"><button type="button" data-sort="name">Машин</button></th>
               <th class="c-group"><button type="button" data-sort="group">Бүлэг</button></th>
               <th class="c-status"><button type="button" data-sort="status">Төлөв</button></th>
+              <th class="c-gps"><button type="button" data-sort="gps">GPS</button></th>
               <th class="c-fuel"><button type="button" data-sort="fuel">Түлш</button></th>
               <th class="c-speed num"><button type="button" data-sort="speed">Хурд</button></th>
               <th class="c-seen"><button type="button" data-sort="seen">Сүүлийн мэдээ</button></th>
@@ -200,7 +215,7 @@
 
     <!-- EVIDENCE: theft alerts picked by truck, dates and tick boxes, printed as one pack -->
     <section class="view" id="view-evidence" hidden aria-label="Нотлох баримт">
-      <p class="lead">Түлшний хулгайн анхааруулгыг машин, бүлэг, огноогоор шүүж, хэрэгтэйгээ сонгоод нэг дор хэвлэнэ. Эхний хуудас нь нэгтгэл; дараа нь тохиолдол бүрт нэг A4 хуудас: түлшний график, газрын зураг, баримт, гарын үсгийн мөр.</p>
+      <p class="lead">Түлшний хулгайн анхааруулгыг машин, бүлэг, огноогоор шүүж, хэрэгтэйгээ сонгоод нэг дор хэвлэнэ. Эхний хуудас нь нэгтгэл; дараа нь тохиолдол бүрт нэг A4 хуудас: түлшний тоолуурын график, газрын зураг, баримт, гарын үсгийн мөр. Зөвхөн түлшний тоолуур өөрөө буурсан гэж харуулсан тохиолдлыг жагсаана; тоолуур өссөн (цэнэглэлт), буураад буцаж өссөн, мэдрэгч гэмтсэн тохиолдлыг хулгайд тооцохгүй.</p>
       <div class="filters">
         <select id="e-veh" aria-label="Машин"><option value="">Бүх машин</option></select>
         <select id="e-group" aria-label="Бүлэг"><option value="">Бүх бүлэг</option></select>
@@ -216,7 +231,7 @@
       <div class="filters">
         <div class="seg" id="e-types" role="group" aria-label="Төрөл">
           <button type="button" data-type="fuel_drain" aria-pressed="true"><i class="sdot critical"></i>Түлш алдагдал</button>
-          <button type="button" data-type="receipt_mismatch" aria-pressed="true"><i class="sdot warning"></i>Баримт зөрсөн</button>
+          <button type="button" data-type="receipt_mismatch" aria-pressed="false" title="Баримтын литрээс бага түлш саванд орсон, эсвэл цэнэглэлт огт харагдаагүй"><i class="sdot warning"></i>Баримтаас дутуу цэнэглэлт</button>
         </div>
         <select id="e-verdict" aria-label="Дүгнэлт">
           <option value="nofalse">Худал дохиог хасах</option>
@@ -414,8 +429,8 @@
             <button type="button" class="btn small" id="d-zoomreset" hidden><svg class="ic"><use href="#i-expand"/></svg>Бүх хугацааг харуулах</button>
           </div>
           <div class="legend" aria-label="Графикийн тайлбар">
-            <span><i class="lg-level"></i>Найдвартай түвшин (тогтворжсон, зогсоолд)</span>
-            <span><i class="lg-raw"></i>Мэдрэгчийн түүхий заалт</span>
+            <span><i class="lg-raw"></i>Түлшний тоолуурын заалт (бодит, дундажлаагүй)</span>
+            <span><i class="lg-level"></i>Тогтсон түвшин (системийн тооцоо)</span>
             <span><i class="lg-drain"></i>Түлш алдагдал</span>
             <span><i class="lg-refuel"></i>Цэнэглэлт</span>
             <span><i class="lg-nosig"></i>Мэдрэгчийн заалтгүй</span>

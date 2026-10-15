@@ -213,11 +213,13 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger }) {
     }
     if (m === 'GET' && p === '/api/alerts') {
       const limit = Math.min(5000, Math.max(1, Math.round(intParam(q.get('limit')) ?? 200)));
-      return send(res, 200, engine.queryAlerts({
+      const list = engine.queryAlerts({
         ...alertFilterFromQuery(q, { intParam, listParam }),
         beforeId: intParam(q.get('beforeId')),
         limit,
-      }));
+      });
+      // meter=1 (the Evidence view): what the fuel meter shows for each theft alert
+      return send(res, 200, q.get('meter') === '1' ? engine.withMeter(list) : list);
     }
     // every alert matching the Alerts view's filter (same query parameters), as Excel
     if ((m === 'GET' || m === 'HEAD') && p === '/api/export/alerts.xlsx') {

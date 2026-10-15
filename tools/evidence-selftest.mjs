@@ -62,6 +62,19 @@ try {
   check('place = where it stood', ev?.place?.source === 'stop' && Math.abs(ev.place.lat - 43.6) < 1e-3, ev?.place);
   check('vehicle and tank', ev?.vehicle.shortName === '1234ӨМЕ' && ev.vehicle.tankLiters === 500, ev?.vehicle);
   check('unknown alert -> null', engine.evidence(987654, NOW) === null);
+  check('meter check: the meter fell -> drop, its litres', ev?.meter?.verdict === 'drop' && ev.meter.lost === 80, ev?.meter);
+
+  // a "drain" the fuel meter does not show (it reads 220 L flat): no litres, not evidence
+  const flatId = engine.raiseAlert({
+    imei: IMEI, name: '1234ӨМЕ', type: 'fuel_drain', severity: 'critical', t: T0 + 150 * MIN, fromT: T0 + 140 * MIN, lat: 43.61, lng: 105.51,
+    title: 'Fuel drop at a stop', detail: 'Fuel fell by 50 L at a stop.', amountMv: 1000, fromMv: 4400, toMv: 3400,
+  }, 'backfill');
+  const evF = engine.evidence(flatId, NOW);
+  check('meter shows no fall -> no_drop, no litres lost', evF?.meter?.verdict === 'no_drop' && evF.lostL === null, { meter: evF?.meter, lostL: evF?.lostL });
+  check('levels before / after are the meter\'s', evF?.before?.liters === 220 && evF?.after?.liters === 220, { before: evF?.before, after: evF?.after });
+  const listed = engine.withMeter(engine.queryAlerts({ types: ['fuel_drain'], limit: 10 }));
+  const byId = new Map(listed.map((a) => [a.id, a.meter]));
+  check('alert list with the meter check (Evidence view)', byId.get(id)?.verdict === 'drop' && byId.get(id).lost === 80 && byId.get(flatId)?.verdict === 'no_drop', [...byId]);
 
   // receipts: a receipt the tank does not account for
   const r = engine.addReceipts({ text: '1234ӨМЕ\t2026-10-10 13:00\t300' }, NOW);
@@ -85,6 +98,24 @@ try {
   const L = sheets[0].columns.findIndex((c) => c.header === 'Литр');
   check('Excel: receipt mismatch carries its missing litres', sheets[0].rows.some((row) => row[L] === 300), sheets[0].rows.map((row) => row[L]));
   check('Excel: thefts are totalled', sheets[0].totalRow?.[7] === 380, sheets[0].totalRow);
+
+  // fleet screen: a probe that reads 10 V all along is a broken fuel sensor, not a full tank
+  const IMEI2 = '999999061234568';
+  engine.applyObjects([{
+    imei: IMEI2, name: '0001ӨМЕ/Түлшний мэдрэгчтэй/', group_name: 'Test', dt_tracker: '2026-10-11 09:58:00', dt_server: '2026-10-11 09:58:00',
+    lat: '43.6', lng: '105.5', speed: '40', params: { io9: '9990', io239: '1', io66: '27000' },
+  }], NOW);
+  const pegged = [];
+  for (let t = NOW - 10 * 60 * MIN; t <= NOW - 2 * MIN; t += 5 * MIN) pegged.push({ t, f: 9990, spd: (t / (5 * MIN)) % 2 ? 40 : 0, ign: 1, pwr: 27000, lat: 43.6, lng: 105.5, odo: null });
+  db.insertSamples(IMEI2, pegged);
+  const view = engine.vehicleView(engine.recs.get(IMEI2), null, NOW);
+  check('fleet: probe at 10 V -> fuel sensor broken, with why', view.fuelSensor === 'fault' && view.fuel?.sensorOk === false && view.fuel.fault?.code === 'limit' && /10 В/.test(view.fuel.fault.short), { fuelSensor: view.fuelSensor, fault: view.fuel?.fault });
+  const fleet = engine.fleetStatusSheets(NOW)[0];
+  const why = fleet.columns.findIndex((c) => c.header === 'Юу нь буруу');
+  const row2 = fleet.rows.find((row) => String(row[0]).startsWith('0001'));
+  check('fleet Excel: the reason is written out', /10 В/.test(row2?.[why] || ''), row2?.[why]);
+  const view1 = engine.vehicleView(engine.recs.get(IMEI), null, NOW);
+  check('fleet: a probe that moved is not flagged', view1.fuel?.fault === null || view1.fuel?.fault?.code !== 'limit', view1.fuel?.fault);
 } finally {
   db.close?.();
   fs.rmSync(dir, { recursive: true, force: true });
