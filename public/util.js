@@ -159,15 +159,16 @@ export function fuelAmount(dmv, cal, litres) {
 
 // ---------- fuel meter check of a theft alert (src/meter.js) ----------
 /** Verdicts where the fuel meter itself shows the loss: only these count as theft evidence. */
-export const METER_CONFIRMS = new Set(['drop', 'short', 'norefuel']);
+export const METER_CONFIRMS = new Set(['drop', 'road', 'short', 'norefuel']);
 export const METER_LABEL = {
   drop: 'Тоолуур буурсан',
+  road: 'Замд явахад тоолуур шатах дээд хэмжээнээс илүү буурсан',
   short: 'Тоолуур баримтаас бага өссөн',
   norefuel: 'Тоолуурт цэнэглэлт харагдаагүй',
   refuel: 'Тоолуур өссөн: цэнэглэлт, хулгай биш',
   recovered: 'Тоолуур буураад буцаж өссөн: алдагдал биш',
   no_drop: 'Тоолуур ийм хэмжээгээр буураагүй',
-  trip: 'Замд явах үеийн бууралт: дундаж хэрэглээнээс хамаардаг тул нотолгоо биш',
+  burnt: 'Буурсан хэмжээ нь шатаж болох дээд хэмжээнд багтана: нотолгоо биш',
   full: 'Баримтын түлш саванд орсон',
   sensor: 'Мэдрэгчийн гэмтэл: заалт найдваргүй',
   nodata: 'Зогсож байх үеийн заалт хангалтгүй',

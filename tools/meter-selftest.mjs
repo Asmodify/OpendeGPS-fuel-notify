@@ -21,7 +21,8 @@ const mv = (l) => l * 20;
 const th = { sensorMinValidMv: 100, powerCutMv: 5000 };
 
 /** Readings every `step` from `start`: each segment {min, from, to (litres), spd} runs for `min` minutes.
- *  Driving readings slosh by up to ±5 L around the line. */
+ *  Driving readings slosh by up to ±5 L around the line (`calm`: ±1 L, a damped sensor). The
+ *  voltage says the engine runs while moving (27.5 V) and rests while standing (25.5 V). */
 function series(start, segs, step = 2 * MIN) {
   const rows = [];
   let t = start;
@@ -30,8 +31,8 @@ function series(start, segs, step = 2 * MIN) {
     const n = Math.max(1, Math.round((s.min * MIN) / step));
     for (let k = 0; k < n; k++, i++, t += step) {
       const l = s.from + ((s.to ?? s.from) - s.from) * (k / n);
-      const slosh = s.spd ? (((i * 37) % 11) - 5) : 0;
-      rows.push({ t, f: s.mv ?? mv(l + slosh), spd: s.spd ?? 0, pwr: s.pwr ?? 27000 });
+      const slosh = s.spd ? (s.calm ? (((i * 37) % 3) - 1) : s.wild ? (((i * 37) % 61) - 30) : (((i * 37) % 11) - 5)) : 0;
+      rows.push({ t, f: s.mv ?? mv(l + slosh), spd: s.spd ?? 0, pwr: s.pwr ?? (s.spd ? 27500 : 25500), ign: s.ign });
     }
   }
   return rows;
@@ -72,10 +73,57 @@ const at = (rows, i) => rows[i].t;
   const t0 = T - 22 * MIN;
   const t = T + 104 * MIN;
   const m = meterCheck({ kind: 'trip', rows, t0, t, amountL: 100, fromMv: mv(400), toMv: mv(250), cal, th });
-  check('trip excess -> set aside (rests on an average consumption), no litres claimed', m.verdict === 'trip' && !CONFIRMS.has(m.verdict) && m.lost === undefined && m.used === undefined && Math.abs(m.fell - 150) < 2, m);
+  check('150 L over 120 km is within the burn ceiling (156 L) -> burnt, no litres claimed', m.verdict === 'burnt' && !CONFIRMS.has(m.verdict) && m.lost === undefined && Math.abs(m.fell - 150) < 2 && Math.abs(m.burn.liters - 156) < 4, m);
   const refuel = series(T - 7 * HOUR, [{ min: 400, from: 300 }, { min: 120, from: 300, to: 260, spd: 60 }, { min: 10, from: 260, to: 460 }, { min: 400, from: 460 }]);
   const r = meterCheck({ kind: 'trip', rows: refuel, t0, t: T + 114 * MIN, amountL: 80, fromMv: mv(300), toMv: mv(160), cal, th });
   check('trip ending fuller -> refuel', r.verdict === 'refuel', r);
+}
+// 5b. the road cannot burn it: 554 L to 140 L over 30 km (30 min at 60 km/h)
+{
+  const rows = series(T - 7 * HOUR, [{ min: 400, from: 450 }, { min: 30, from: 450, to: 40, spd: 60 }, { min: 400, from: 40 }]);
+  const t0 = T - 22 * MIN;
+  const t = T + 20 * MIN;
+  const m = meterCheck({ kind: 'trip', rows, t0, t, amountL: 395, cal, th });
+  check('410 L gone over 30 km -> road, lost = the fall beyond the ceiling', m.verdict === 'road' && CONFIRMS.has(m.verdict) && m.lost >= 365 && m.lost <= 395 && Math.abs(m.burn.km - 31) < 2, m);
+  const small = meterCheck({ kind: 'trip', rows, t0, t, amountL: 200, cal, th });
+  check('never more than the alert says', small.verdict === 'road' && small.lost === 200, small);
+}
+// 5c. GPS silence: the truck turned up 60 km away after 2 h of silence, 100 L less -> the silence
+// alone could burn it; silent at the same spot with the engine off -> it stood, the loss is real
+{
+  const far = (rows, movedKm) => rows.map((s, i) => ({ ...s, lat: 43.6 + (i >= rows.length / 2 ? movedKm / 111 : 0), lng: 105.5 }));
+  const stand = series(T - 7 * HOUR, [{ min: 420, from: 400 }, { min: 300, from: 300 }]);
+  const gapRows = far(stand, 60).filter((s) => s.t < T - 60 * MIN || s.t >= T + 60 * MIN); // 2 h silent around T
+  const m = meterCheck({ kind: 'parked', rows: gapRows, t0: T - 60 * MIN, t: T + 60 * MIN, amountL: 100, cal, th });
+  check('2 h silent, 60 km away after: burnt, note silent', m.verdict === 'burnt' && m.note === 'silent' && m.burn.silentMovedMs >= 2 * HOUR && m.burn.silentMovedMs < 2.1 * HOUR, m);
+  const same = far(stand, 0).filter((s) => s.t < T - 60 * MIN || s.t >= T + 60 * MIN);
+  const d = meterCheck({ kind: 'parked', rows: same, t0: T - 60 * MIN, t: T + 60 * MIN, amountL: 100, cal, th });
+  check('2 h silent at the same spot, engine off -> drop of the whole 100 L', d.verdict === 'drop' && d.lost === 100, d);
+}
+// 5d. a short move inside a stop (pulling across the yard: 2 km in 4 min) does not end the stop
+{
+  const rows = series(T - 7 * HOUR, [{ min: 380, from: 300 }, { min: 4, from: 300, to: 299, spd: 30 }, { min: 36, from: 299 }, { min: 40, from: 299, to: 220 }, { min: 300, from: 220 }]);
+  const m = meterCheck({ kind: 'parked', rows, t0: T, t: T + 40 * MIN, amountL: 80, cal, th });
+  check('level before taken across the short move -> drop, before 300', m.verdict === 'drop' && Math.abs(m.before.v - 300) < 2 && m.lost >= 75, m);
+  const long = series(T - 7 * HOUR, [{ min: 380, from: 300 }, { min: 15, from: 300, to: 290, spd: 40 }, { min: 25, from: 290 }, { min: 40, from: 290, to: 220 }, { min: 300, from: 220 }]);
+  const l = meterCheck({ kind: 'parked', rows: long, t0: T, t: T + 40 * MIN, amountL: 70, cal, th });
+  check('a 15 min drive ends the stop: level before is from after it', l.verdict === 'drop' && Math.abs(l.before.v - 290) < 2, l);
+}
+// 5e. the engine on all night takes its ceiling off the fall; the engine off leaves it whole;
+// a cold night's shrink is not a loss
+{
+  const idle = series(T - 7 * HOUR, [{ min: 420, from: 400 }, { min: 600, from: 400, to: 370 }, { min: 300, from: 370 }]).map((s) => ({ ...s, ign: 1 }));
+  const m = meterCheck({ kind: 'parked', rows: idle, t0: T, t: T + 600 * MIN, amountL: 30, cal, th });
+  check('30 L over 10 h with the engine on (ceiling 60 L) -> burnt', m.verdict === 'burnt' && m.burn.liters >= 58, m);
+  const off = idle.map((s) => ({ ...s, ign: 0, pwr: 25500 }));
+  const volts = idle.map((s) => ({ ...s, ign: 0, pwr: 27800 })); // the flag says off, the alternator says running
+  const v = meterCheck({ kind: 'parked', rows: volts, t0: T, t: T + 600 * MIN, amountL: 30, cal, th });
+  check('27.8 V while standing counts as the engine running -> burnt', v.verdict === 'burnt', v);
+  const o = meterCheck({ kind: 'parked', rows: off, t0: T, t: T + 600 * MIN, amountL: 30, cal, th });
+  check('the same with the engine off -> drop of 30 L', o.verdict === 'drop' && o.lost === 30, o);
+  const cold = series(T - 7 * HOUR, [{ min: 420, from: 500 }, { min: 600, from: 500, to: 489 }, { min: 300, from: 489 }]);
+  const c = meterCheck({ kind: 'parked', rows: cold, t0: T, t: T + 600 * MIN, amountL: 11, cal, th });
+  check('11 L off a 500 L level overnight is within thermal shrink -> not a drop', !CONFIRMS.has(c.verdict), c);
 }
 // 6. the probe dies: 300 L "falls" to 12 L, then reads 12 L flat while the truck drives
 {
@@ -98,10 +146,10 @@ const at = (rows, i) => rows[i].t;
 // 7. few readings (trackers asleep while parked): one before, one after
 {
   const rows = [
-    { t: T - 3 * HOUR, f: mv(300), spd: 0, pwr: 27000 },
-    { t: T - 1 * HOUR, f: mv(300), spd: 0, pwr: 27000 },
-    { t: T + 2 * HOUR, f: mv(200), spd: 0, pwr: 27000 },
-    { t: T + 4 * HOUR, f: mv(200), spd: 0, pwr: 27000 },
+    { t: T - 3 * HOUR, f: mv(300), spd: 0, pwr: 25500 },
+    { t: T - 1 * HOUR, f: mv(300), spd: 0, pwr: 25500 },
+    { t: T + 2 * HOUR, f: mv(200), spd: 0, pwr: 25500 },
+    { t: T + 4 * HOUR, f: mv(200), spd: 0, pwr: 25500 },
   ];
   const m = meterCheck({ kind: 'parked', rows, t0: T, t: T + HOUR, amountL: 100, cal, th });
   check('sparse readings still show the drop', m.verdict === 'drop' && m.lost === 100, m);
@@ -138,7 +186,7 @@ const at = (rows, i) => rows[i].t;
 {
   const rows = series(T - 7 * HOUR, [{ min: 417, from: 420, to: 410, spd: 60 }, { min: 5, from: 410, to: 388 }, { min: 300, from: 388 }]);
   const m = meterCheck({ kind: 'parked', rows, t0: T, t: T + 5 * MIN, amountL: 22, cal, th });
-  check('drop in the first minutes of a stop -> no settled level, not evidence', !CONFIRMS.has(m.verdict) && m.verdict === 'nodata', m);
+  check('drop in the first minutes of a stop -> no settled level before it, not evidence', !CONFIRMS.has(m.verdict), m);
 }
 // 8c. receipts read only settled levels: a stop's first minutes at the top of the scale are not a fill,
 // and a fill at a pump stop too short to settle is never called short
@@ -153,6 +201,39 @@ const at = (rows, i) => rows[i].t;
   const queue = series(T - 7 * HOUR, [{ min: 400, from: 200 }, { min: 30, from: 200, to: 185, spd: 50 }, { min: 20, from: 185 }, { min: 6, from: 185, to: 285 }, { min: 20, from: 285 }, { min: 300, from: 285, to: 200, spd: 50 }]);
   const q = meterCheck({ kind: 'receipt', rows: queue, t0: T - 7 * HOUR + 450 * MIN, t: T - 7 * HOUR + 456 * MIN, receiptL: 300, missingL: 200, refuelSeen: true, cal, th });
   check('fill measured inside one stop (settled before and after) -> short, from that stop\'s levels', q.verdict === 'short' && Math.abs(q.wentIn - 100) < 3 && Math.abs(q.before.v - 185) < 3, q);
+}
+// 5f. a sensor that follows its supply: the reading swings 490 / 375 / 445 / 415 / 490 / 377 while the
+// truck stands -> no level to trust
+{
+  const rows = series(T - 7 * HOUR, [{ min: 300, from: 490 }, { min: 15, from: 375 }, { min: 30, from: 445 }, { min: 30, from: 415 }, { min: 20, from: 490 }, { min: 300, from: 377 }]);
+  const m = meterCheck({ kind: 'parked', rows, t0: T - 30 * MIN, t: T - 20 * MIN, amountL: 110, cal, th });
+  check('swinging reading while standing -> sensor, flicker', m.verdict === 'sensor' && m.note === 'flicker', m);
+  const theftThenFill = series(T - 7 * HOUR, [{ min: 420, from: 300 }, { min: 30, from: 300, to: 220 }, { min: 60, from: 220 }, { min: 20, from: 220, to: 450 }, { min: 300, from: 450 }]);
+  const tf = meterCheck({ kind: 'parked', rows: theftThenFill, t0: T, t: T + 30 * MIN, amountL: 80, cal, th });
+  check('a drop and a later refuel are two moves, not flicker', tf.verdict === 'drop' && tf.lost === 80, tf);
+}
+// 5g. the level comes back an hour later, the truck still standing: a dip, not a loss
+{
+  const rows = series(T - 7 * HOUR, [{ min: 420, from: 390 }, { min: 10, from: 390, to: 354 }, { min: 60, from: 354 }, { min: 10, from: 354, to: 390 }, { min: 300, from: 390 }]);
+  const m = meterCheck({ kind: 'parked', rows, t0: T, t: T + 10 * MIN, amountL: 36, cal, th });
+  check('back up within 3 h at the same stop -> recovered', m.verdict === 'recovered' && !CONFIRMS.has(m.verdict), m);
+  const late = series(T - 7 * HOUR, [{ min: 420, from: 390 }, { min: 10, from: 390, to: 354 }, { min: 240, from: 354 }, { min: 10, from: 354, to: 390 }, { min: 300, from: 390 }]);
+  const l = meterCheck({ kind: 'parked', rows: late, t0: T, t: T + 10 * MIN, amountL: 36, cal, th });
+  check('back up only 4 h later -> still a drop', l.verdict === 'drop', l);
+}
+// 5h. a damped sensor, steady on the move: 275 L while driving, a 14 min stop with no settled
+// reading, 187 L while driving on -> the levels come from the drives, the loss counts
+{
+  const stop = T - 40 * MIN;
+  const mk = (o) => series(T - 7 * HOUR, [{ min: 380, from: 300, to: 275, spd: 50, ...o }, { min: 15, from: 275 }, { min: 25, from: 187, to: 176, spd: 50, ...o }, { min: 300, from: 176 }], MIN)
+    .filter((s) => s.t <= stop || s.t >= stop + 15 * MIN); // the stop: one reading, then 14 min of silence
+  const rows = mk({ calm: true });
+  const t0 = stop;
+  const m = meterCheck({ kind: 'parked', rows, t0, t: T - 25 * MIN, amountL: 90, cal, th });
+  check('steady sensor on the move -> levels from the drives, marked moving', m.verdict === 'drop' && m.before?.moving === true && m.after?.moving === true && Math.abs(m.before.v - 275) < 4 && Math.abs(m.after.v - 187) < 4, m);
+  check('the loss is the fall beyond what the drive could burn', m.lost >= 65 && m.lost <= 88, m);
+  const w = meterCheck({ kind: 'parked', rows: mk({ wild: true }), t0, t: T - 25 * MIN, amountL: 90, cal, th });
+  check('a sloshing sensor gives no level on the move -> nodata', w.verdict === 'nodata', w);
 }
 // 9. the fleet screen's probe check over a day of readings
 {

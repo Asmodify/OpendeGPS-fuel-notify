@@ -1,11 +1,14 @@
 // Evidence pack: printable pages for theft alerts, opened from the dashboard's "Нотлох баримт"
 // view (or an alert's "Нотлох баримт" button) as evidence.html#ids=12,15,40.
 // The first page sums them up (per truck, then every incident in one table); after it comes one
-// A4 page per incident: the facts, the fuel chart around it (the bright line is the fuel meter's
-// own readings, as the tracker sent them), the track on a map, the fuel receipts of those days
-// and lines to sign. Only litres the meter itself shows are counted: an incident where the meter
-// went up (a refuel), dipped and came back, or the sensor is broken is marked "not evidence" and
-// left out of the totals. The browser's print dialog turns it into paper or a PDF.
+// A4 page per incident: the facts, the fuel chart around it (the thick orange line is the fuel
+// meter's own readings while the truck stood still and the fuel had settled, the thin one every
+// reading as the tracker sent it), the track on a map, the fuel receipts of those days and lines
+// to sign. Only litres the meter itself shows beyond what the truck could have burnt are counted:
+// an incident where the meter went up (a refuel), dipped and came back, fell by no more than the
+// engine could burn, or the sensor is broken, and one a person marked a false alarm, is marked
+// "not evidence" and left out of the totals; two incidents of one truck over the same time count
+// once. The browser's print dialog turns it into paper or a PDF.
 import { html, setHTML, $, $$, fmtNum, fmtDur, isNum, normCal, api, METER_LABEL, meterConfirms } from './util.js';
 import { FuelChart } from './chart.js';
 
@@ -45,9 +48,55 @@ const fmtShort = (ms, withTime = true) => {
 };
 const plateOf = (e) => e.vehicle.shortName || e.vehicle.plate || e.vehicle.imei || '';
 const lostOf = (e) => (isNum(e.lostL) ? Number(e.lostL) : null);
-/** The fuel meter shows the loss (no meter check: an older server, taken as shown). */
-const confirmed = (e) => !e.meter || meterConfirms(e.meter);
+/** Counted as theft: the fuel meter shows the loss (no meter check: an older server, taken as
+ *  shown) and no one has marked the alert a false alarm. */
+const confirmed = (e) => e.alert.verdict !== 'false_alarm' && (!e.meter || meterConfirms(e.meter));
 const meterLabel = (e) => (e.meter ? METER_LABEL[e.meter.verdict] || e.meter.verdict : '');
+/** What the burn ceiling rests on: "12.4 км явсан, хөдөлгүүр 2 ц асаалттай зогссон, GPS 40 мин мэдээлэлгүй". */
+function burnText(b) {
+  if (!b) return '';
+  const parts = [];
+  if (b.km >= 0.5) parts.push(`${fmtNum(b.km, 1)} км явсан`);
+  if (b.idleMs >= 5 * 60e3) parts.push(`хөдөлгүүр ${fmtDur(b.idleMs)} асаалттай зогссон`);
+  if (b.silentMs >= 15 * 60e3) parts.push(`GPS ${fmtDur(b.silentMs)} мэдээлэлгүй${b.silentMovedMs >= 15 * 60e3 ? ', тэр хооронд өөр газар очсон' : ''}`);
+  if (b.moveBias > 0) parts.push(`нэг заалтыг явж байхад уншсан: ${L(b.moveBias)} алдаа`);
+  return parts.join(', ');
+}
+/** Why an incident is not counted, in one sentence. */
+function whyNot(e) {
+  if (e.alert.verdict === 'false_alarm') return 'Шалгасан хүн худал дохио гэж тэмдэглэсэн';
+  const m = e.meter;
+  if (!m) return '';
+  if (m.verdict === 'burnt' && m.burn) {
+    const how = burnText(m.burn);
+    return `Тоолуур ${L(m.fell, 1)} буурсан ч ${how ? `${how}: ` : ''}шатаж болох дээд хэмжээ ${L(m.burn.total ?? m.burn.liters, 1)}-ээс хэтрээгүй тул нотолгоо биш`;
+  }
+  return meterLabel(e);
+}
+/** Confirmed drains of one truck over the same time are one theft the detector raised twice (a
+ *  stop's drain inside a longer parked one): the larger stays, the other is marked as overlapping.
+ *  Map of list index -> index of the one it overlaps. */
+function overlaps(list) {
+  const dup = new Map();
+  const byTruck = new Map();
+  list.forEach((e, i) => {
+    if (!e || e.error || e.alert.type !== 'fuel_drain' || !confirmed(e)) return;
+    const k = e.vehicle.imei || plateOf(e);
+    if (!byTruck.has(k)) byTruck.set(k, []);
+    byTruck.get(k).push(i);
+  });
+  for (const idx of byTruck.values()) {
+    idx.sort((a, b) => (lostOf(list[b]) ?? 0) - (lostOf(list[a]) ?? 0) || a - b);
+    const kept = [];
+    for (const i of idx) {
+      const e = list[i];
+      const hit = kept.find((j) => list[j].eventFrom <= e.eventTo && e.eventFrom <= list[j].eventTo);
+      if (hit !== undefined) dup.set(i, hit);
+      else kept.push(i);
+    }
+  }
+  return dup;
+}
 
 /** The litres the fuel fell by (before → after), when the alert knows both levels. */
 function fellBy(e) {
@@ -85,17 +134,19 @@ async function loadAll() {
 }
 
 // ---------------------------------------------------------------- summary page
-function summaryPage(list, now) {
+function summaryPage(list, now, dup) {
   const ok = list.filter((e) => e && !e.error);
-  const total = ok.reduce((s, e) => s + (lostOf(e) ?? 0), 0);
-  const notEvidence = ok.filter((e) => !confirmed(e)).length;
+  const counted = (e) => confirmed(e) && !dup.has(list.indexOf(e));
+  const inTotal = ok.filter(counted);
+  const total = inTotal.reduce((s, e) => s + (lostOf(e) ?? 0), 0);
+  const left = ok.length - inTotal.length;
   const trucks = new Map();
   for (const e of ok) {
     const k = e.vehicle.imei;
-    if (!trucks.has(k)) trucks.set(k, { name: plateOf(e), group: e.vehicle.group, n: 0, litres: 0, first: null, last: null });
+    if (!trucks.has(k)) trucks.set(k, { name: plateOf(e), group: e.vehicle.group, n: 0, all: 0, litres: 0, first: null, last: null });
     const g = trucks.get(k);
-    g.n++;
-    g.litres += lostOf(e) ?? 0;
+    g.all++;
+    if (counted(e)) { g.n++; g.litres += lostOf(e) ?? 0; }
     g.first = g.first === null ? e.eventFrom : Math.min(g.first, e.eventFrom);
     g.last = g.last === null ? e.eventTo : Math.max(g.last, e.eventTo);
   }
@@ -110,31 +161,31 @@ function summaryPage(list, now) {
       <div><span>Бэлтгэсэн</span><b>${fmtShort(now)}</b></div>
     </div>
     <div class="sum-tiles">
-      <div class="sum-tile"><span>Тоолуураар батлагдсан</span><b>${ok.length - notEvidence}${notEvidence ? html`<small> / ${ok.length}</small>` : ''}</b></div>
+      <div class="sum-tile"><span>Хулгайд тооцсон</span><b>${inTotal.length}${left ? html`<small> / ${ok.length}</small>` : ''}</b></div>
       <div class="sum-tile bad"><span>Алдсан түлш</span><b>${L(total)}</b></div>
       <div class="sum-tile"><span>Машин</span><b>${truckList.length}</b></div>
     </div>
     ${truckList.length > 1 ? html`<h3>Машин тус бүрээр</h3>
     <table class="ev-tbl">
       <thead><tr><th>Машин</th><th>Бүлэг</th><th class="num">Тохиолдол</th><th class="num">Алдсан түлш</th><th>Эхний</th><th>Сүүлийн</th></tr></thead>
-      <tbody>${truckList.map((g) => html`<tr><td><b>${g.name}</b></td><td>${g.group || '—'}</td><td class="num">${g.n}</td><td class="num bad"><b>${L(g.litres)}</b></td><td class="nowrap">${fmtShort(g.first)}</td><td class="nowrap">${fmtShort(g.last)}</td></tr>`)}</tbody>
+      <tbody>${truckList.map((g) => html`<tr><td><b>${g.name}</b></td><td>${g.group || '—'}</td><td class="num">${g.n}${g.all > g.n ? html`<small class="muted"> / ${g.all}</small>` : ''}</td><td class="num bad"><b>${L(g.litres)}</b></td><td class="nowrap">${fmtShort(g.first)}</td><td class="nowrap">${fmtShort(g.last)}</td></tr>`)}</tbody>
     </table>` : ''}
     <h3>Тохиолдлууд</h3>
     <table class="ev-tbl incidents">
       <thead><tr><th class="num">№</th><th>Машин</th><th>Эхэлсэн</th><th>Юу болсон</th><th class="num">Тоолуур: өмнө → дараа</th><th class="num">Алдсан</th><th>Байршил</th><th>Дүгнэлт</th></tr></thead>
       <tbody>${list.map((e, i) => (!e || e.error
     ? html`<tr><td class="num">${i + 1}</td><td colspan="7" class="muted">Анхааруулга #${ids[i]}: ачаалж чадсангүй${e?.error ? ` (${e.error})` : ''}</td></tr>`
-    : html`<tr class="${confirmed(e) ? '' : 'not-ev'}"><td class="num">${i + 1}</td><td class="nowrap"><b>${plateOf(e)}</b></td><td class="nowrap">${fmtShort(e.eventFrom)}</td><td>${e.alert.title || typeLabel(e.alert.type)}${confirmed(e) ? '' : html`<small class="m-no">${meterLabel(e)}</small>`}</td>
+    : html`<tr class="${counted(e) ? '' : 'not-ev'}"><td class="num">${i + 1}</td><td class="nowrap"><b>${plateOf(e)}</b></td><td class="nowrap">${fmtShort(e.eventFrom)}</td><td>${e.alert.title || typeLabel(e.alert.type)}${counted(e) ? '' : html`<small class="m-no">${dup.has(i) ? `№ ${dup.get(i) + 1}-тэй нэг хугацаанд: нэг удаа тооцсон` : whyNot(e)}</small>`}</td>
           <td class="num nowrap">${isNum(e.before?.liters) && isNum(e.after?.liters) ? `${L(e.before.liters)} → ${L(e.after.liters)}` : e.receipt ? `баримт ${L(e.receipt.litres)}` : '—'}</td>
-          <td class="num bad nowrap"><b>${L(lostOf(e))}</b></td>
+          <td class="num bad nowrap"><b>${counted(e) ? L(lostOf(e)) : '—'}</b></td>
           <td class="nowrap">${e.place ? html`<a href="${mapsUrl(e.place)}" target="_blank" rel="noopener">${coord(e.place)}</a>` : '—'}</td>
           <td>${e.alert.type === 'fuel_drain' ? VERDICTS[e.alert.verdict] || '' : ''}</td></tr>`))}</tbody>
-      <tfoot><tr><td></td><td colspan="4"><b>Нийт</b>${notEvidence ? html` <span class="muted">(тоолуур батлаагүй ${notEvidence} тохиолдлыг оруулаагүй)</span>` : ''}</td><td class="num bad nowrap"><b>${L(total)}</b></td><td colspan="2"></td></tr></tfoot>
+      <tfoot><tr><td></td><td colspan="4"><b>Нийт</b>${left ? html` <span class="muted">(хулгайд тооцоогүй ${left} тохиолдлыг оруулаагүй)</span>` : ''}</td><td class="num bad nowrap"><b>${L(total)}</b></td><td colspan="2"></td></tr></tfoot>
     </table>
     <div class="how">
       <h3>Хэрхэн уншихыг</h3>
-      <p>Тохиолдол бүр дараагийн хуудсуудад нэг A4 хуудастай. Графикт ганц шугам бий: <i class="k-raw"></i><b>улбар шар шугам</b> нь машин зогсож байх үеийн түлшний тоолуурын (мэдрэгчийн) заалт, GPS төхөөрөмжөөс ирсэн тэр чигээрээ, дундажлаагүй. Машин явж байхад болон зогссоноос хойш 10 минутад түлш савлаж заалт үсэрдэг тул тэр хэсгийг зураагүй, явсан хугацааг <i class="k-drive"></i>саарал бүсээр тэмдэглэсэн. <i class="k-drain"></i>Улаан бүс нь түлш алдагдсан хугацаа. Графикийн доор машины хурд (0 бол зогсож байсан), хөдөлгүүр асаалттай эсэх, тэжээлийн (масс) төлөв.</p>
-      <p>“Өмнө”, “дараа” нь тохиолдлын өмнөх ба дараах зогсож байх үеийн тоолуурын заалт. “Алдсан” нь машин зогсож байхад тоолуур буурсан хэмжээ; системийн тооцоо үүнээс бага бол бага нь. Дундаж хэрэглээ, тооцоолсон түвшин ашиглаагүй. Тоолуур өссөн (цэнэглэлт), буураад буцаж өссөн, мэдрэгч гэмтсэн, эсвэл зөвхөн замд явах үеийн хэрэглээтэй харьцуулж илэрсэн тохиолдлыг хулгайд тооцохгүй, нийтэд оруулахгүй. Литрийг машины савны тохируулгын хүснэгтээр тооцсон. Мэдээллийг GPS төхөөрөмжөөс (fms.gpsbox.mn) авсан, өөрчлөөгүй.</p>
+      <p>Тохиолдол бүр дараагийн хуудсуудад нэг A4 хуудастай. Графикийн <i class="k-raw"></i><b>улбар шар шугам</b> нь түлшний тоолуурын (мэдрэгчийн) заалт, GPS төхөөрөмжөөс ирсэн тэр чигээрээ, дундажлаагүй. <i class="k-thin"></i>Нарийн шугам бүх заалт: машин явж байхад болон зогссоноос хойш 10 минутад түлш савлаж заалт үсэрдэг тул тэр хэсгийг нарийнаар зурсан, явсан хугацааг <i class="k-drive"></i>саарал бүсээр тэмдэглэсэн. <b>Бүдүүн шугам</b> нь зогсож, түлш нь тогтсон үеийн заалт: тооцоонд зөвхөн үүнийг авсан. <i class="k-drain"></i>Улаан бүс нь түлш алдагдсан хугацаа. Графикийн доор машины хурд (0 бол зогсож байсан), хөдөлгүүр асаалттай эсэх, тэжээлийн (масс) төлөв.</p>
+      <p>“Өмнө”, “дараа” нь тохиолдлын өмнөх ба дараах тогтсон заалт. Машин 10 минут зогсдоггүй бол явж байхад тогтвортой байсан заалтыг авч, “явж байхад” гэж тэмдэглэсэн; тийм заалт зогссон үеийнхээс савны 5 хувиар зөрж болох тул тэр хэмжээг нэмж хассан. Тэр хооронд машин явсан, хөдөлгүүр асаалттай зогссон, эсвэл GPS мэдээлэлгүй байсан бол шатаж болох дээд хэмжээг хассан: явсан км тутамд 1.3 л (эсвэл явсан цагт 50 л, алинаас нь их нь), хөдөлгүүр асаалттай зогссон цагт 6 л, GPS мэдээлэлгүй байхад өөр газар очсон бол тэр цагт 100 л. Энэ нь дундаж хэрэглээ биш, хамгийн ихдээ шатах хэмжээ. “Алдсан” нь үүнээс илүү буурсан хэсэг; системийн тооцоо үүнээс бага бол бага нь. Шөнийн хүйтэнд түлш агшдаг тул түвшингийн 2.5 хувиас бага бууралтыг тооцохгүй. Тоолуур өссөн (цэнэглэлт), буураад 3 цагийн дотор буцаж өссөн, мэдрэгч гэмтсэн эсвэл зогсож байхад заалт нь дээш доош савласан, бууралт нь шатах дээд хэмжээнд багтсан, эсвэл шалгасан хүн худал дохио гэж тэмдэглэсэн тохиолдлыг хулгайд тооцохгүй, нийтэд оруулахгүй. Нэг машины нэг хугацааны хоёр тохиолдлыг нэг удаа тооцсон. Литрийг машины савны тохируулгын хүснэгтээр тооцсон. Мэдээллийг GPS төхөөрөмжөөс (fms.gpsbox.mn) авсан, өөрчлөөгүй.</p>
     </div>
     ${pageFoot()}
   </section>`;
@@ -151,7 +202,7 @@ function pageFoot(extra = '') {
 }
 
 // ---------------------------------------------------------------- incident page
-function incidentPage(e, i, n) {
+function incidentPage(e, i, n, dup) {
   if (!e || e.error) {
     return html`<section class="page incident">
       ${pageHead(`Нотлох баримт № ${i + 1}`, `${i + 1} / ${n}`)}
@@ -182,9 +233,10 @@ function incidentPage(e, i, n) {
     );
   } else {
     facts.push(
-      fact('Тоолуур (өмнө)', L(e.before?.liters, 1)),
-      fact('Тоолуур (дараа)', L(e.after?.liters, 1)),
+      fact(`Тоолуур (өмнө${e.before?.moving ? ', явж байхад' : ''})`, L(e.before?.liters, 1)),
+      fact(`Тоолуур (дараа${e.after?.moving ? ', явж байхад' : ''})`, L(e.after?.liters, 1)),
       isNum(fell) ? fact(fell < 0 ? 'Өссөн' : 'Буурсан', L(Math.abs(fell), 1), fell < 0 ? 'good' : '') : '',
+      m?.burn ? html`<div class="fact wide"><span>Шатаж болох дээд хэмжээ (хассан)</span><b>${L(m.burn.total ?? m.burn.liters, 1)}</b><small>${burnText(m.burn)}</small></div>` : '',
     );
   }
   const actFacts = act ? [
@@ -196,20 +248,23 @@ function incidentPage(e, i, n) {
   ] : [];
   const verdict = a.type === 'fuel_drain' ? VERDICTS[a.verdict] : null;
   const isEv = confirmed(e);
+  const dupI = dup.get(i);
+  const box = a.verdict === 'false_alarm' ? ['Шалгасан хүн', 'Худал дохио'] : isEv ? ['Алдсан', L(lost)] : ['Тоолуураар', 'Батлагдаагүй'];
   return html`<section class="page incident" data-i="${i}">
     ${pageHead(`Нотлох баримт № ${i + 1}`, `${i + 1} / ${n}`)}
     <div class="inc-top">
       <div class="inc-truck"><b>${plateOf(e)}</b><span>${[e.vehicle.group, e.vehicle.tankLiters ? `сав ${fmtNum(e.vehicle.tankLiters)} л` : ''].filter(Boolean).join(' · ')}</span></div>
       <div class="inc-what"><span class="kind">${typeLabel(a.type)} · ${SEV_LABEL[a.severity] || ''}</span><b>${a.title || typeLabel(a.type)}</b>
         ${verdict ? html`<span class="verdict v-${a.verdict}">${verdict}</span>` : ''}</div>
-      <div class="inc-lost${isEv ? '' : ' none'}"><span>${isEv ? 'Алдсан' : 'Хулгай'}</span><b>${isEv ? L(lost) : 'Батлагдаагүй'}</b></div>
+      <div class="inc-lost${isEv ? '' : ' none'}"><span>${box[0]}</span><b>${box[1]}</b></div>
     </div>
-    ${isEv ? '' : html`<div class="not-evidence"><b>Энэ тохиолдлыг хулгайн нотолгоо болгож болохгүй.</b> ${meterLabel(e)}${e.meter?.verdict === 'refuel' ? ': түлш нэмэгдсэн нь цэнэглэлт.' : '.'} Графикийн тоолуурын заалтыг харна уу.</div>`}
+    ${isEv ? '' : html`<div class="not-evidence"><b>Энэ тохиолдлыг хулгайн нотолгоо болгож болохгүй.</b> ${whyNot(e)}${e.meter?.verdict === 'refuel' ? ': түлш нэмэгдсэн нь цэнэглэлт' : ''}. ${a.verdict === 'false_alarm' ? 'Нийтэд оруулаагүй.' : 'Графикийн тоолуурын заалтыг харна уу.'}</div>`}
+    ${dupI === undefined ? '' : html`<div class="not-evidence"><b>Нотлох баримт № ${dupI + 1}-тэй нэг хугацаанд.</b> Систем нэг тохиолдлыг хоёр удаа илрүүлсэн тул нэгтгэлд их литртэйг нь нэг удаа тооцсон.</div>`}
     <div class="facts">${facts}${actFacts}
       ${e.place ? html`<div class="fact wide"><span>Байршил${e.place.source === 'stop' ? ' (зогсож байсан цэг)' : ''}</span><b><a href="${mapsUrl(e.place)}" target="_blank" rel="noopener">${coord(e.place)}</a></b></div>` : ''}
     </div>
     ${e.dataKept ? html`<div class="fig"><div class="fig-cap">Түлшний тоолуурын заалт ба машины төлөв, ${fmtShort(e.from)} — ${fmtShort(e.to)}</div><div class="ev-chart"></div>
-      <div class="legend"><span><i class="lg-raw"></i>Түлшний тоолуурын заалт, зогсож байхад (GPS-ээс ирсэн тэр чигээрээ)</span><span><i class="lg-drive"></i>Явж байсан: заалтыг зураагүй</span><span><i class="lg-drain"></i>Энэ тохиолдол</span><span><i class="lg-spd"></i>Хурд</span><span><i class="lg-ign"></i>Хөдөлгүүр асаалттай</span><span><i class="lg-ignoff"></i>унтраастай</span><span><i class="lg-pwroff"></i>Тэжээл унтраастай</span></div></div>
+      <div class="legend"><span><i class="lg-raw"></i>Тоолуурын заалт, зогсож тогтсон үед (тооцоонд орсон)</span><span><i class="lg-thin"></i>Бүх заалт (явж байхад савлана)</span><span><i class="lg-drive"></i>Явж байсан</span><span><i class="lg-drain"></i>Энэ тохиолдол</span><span><i class="lg-spd"></i>Хурд</span><span><i class="lg-ign"></i>Хөдөлгүүр асаалттай</span><span><i class="lg-ignoff"></i>унтраастай</span><span><i class="lg-pwroff"></i>Тэжээл унтраастай</span></div></div>
       <div class="fig"><div class="fig-cap">Явсан зам: <i class="k-track"></i>энэ хугацаанд, <i class="k-ev"></i>түлш алдагдсан үед, <i class="k-pin"></i>${e.place?.source === 'stop' ? 'зогсож байсан цэг' : 'илэрсэн цэг'}</div><div class="ev-map"></div></div>`
     : html`<p class="missing">Энэ үеийн GPS бичлэг хадгалагдаагүй (дэлгэрэнгүй бичлэгийг ${Math.round((e.keepHours || 1464) / 24)} хоног хадгалдаг) — тоолуурын заалт, график, газрын зураг гаргах боломжгүй.</p>`}
     ${e.receipts.length ? html`<div class="fig"><div class="fig-cap">Тэр өдрүүдийн түлшний баримт</div>
@@ -368,7 +423,8 @@ async function main() {
     const names = [...new Set(ok.map(plateOf))];
     document.title = `Нотлох баримт · ${names.length === 1 ? names[0] : `${names.length} машин`} · ${ok.length} тохиолдол`;
   }
-  setHTML($('#ev-pages'), html`${list.length > 1 ? summaryPage(list, now) : ''}${list.map((e, i) => incidentPage(e, i, list.length))}`);
+  const dup = overlaps(list);
+  setHTML($('#ev-pages'), html`${list.length > 1 ? summaryPage(list, now, dup) : ''}${list.map((e, i) => incidentPage(e, i, list.length, dup))}`);
   const waits = [];
   const a4 = cssPx('297mm');
   for (const page of $$('.page.incident[data-i]')) {

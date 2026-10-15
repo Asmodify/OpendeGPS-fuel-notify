@@ -1574,7 +1574,7 @@ export class Engine {
     // has no settled standing reading: never the detector's averaged levels), and only a loss it
     // confirms has litres (a refuel, a dip that came back or a sensor fault has none)
     if (meter) {
-      const lv = (m) => (m ? { t: m.t, mv: m.mv, liters: meter.unit === 'L' ? m.v : L(m.mv) } : null);
+      const lv = (m) => (m ? { t: m.t, mv: m.mv, liters: meter.unit === 'L' ? m.v : L(m.mv), ...(m.moving ? { moving: true } : {}) } : null);
       before = lv(meter.before);
       after = lv(meter.after);
       lostL = CONFIRMS.has(meter.verdict) && meter.unit === 'L' && Number.isFinite(meter.lost) ? meter.lost : null;

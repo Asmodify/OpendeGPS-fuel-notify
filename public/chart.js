@@ -3,9 +3,9 @@
 //      the detector's settled levels (thin dashed line; opts.levels === false leaves it out),
 //      alert markers, shaded periods where the sensor gave no valid reading while powered.
 //   2. Activity band: speed area, engine (ignition) strip, tracker power strip.
-// opts.plain (evidence pages): the meter only while standing still and settled (driving readings
-// and the first SETTLE minutes after a stop slosh and are left out, the driving time shaded grey
-// instead), a plain speed lane and the engine strip under it, no marker lines.
+// opts.plain (evidence pages): the meter thick only while standing still and settled (driving
+// readings and the first SETTLE minutes after a stop slosh: drawn thin, the driving time shaded
+// grey), a plain speed lane and the engine strip under it, no marker lines.
 // Crosshair tooltip on hover/tap, drag (mouse) to zoom, double-click to reset.
 import { fmtFull, fmtDayShort, fmtClock, fmtNum, mvToPct, isNum, fuelAmount } from './util.js';
 
@@ -219,7 +219,7 @@ export class FuelChart {
     for (let i = l0; i < l1; i++) vmax = Math.max(vmax, u.of(L[i][1]));
     // raw readings may slosh above full; allow some headroom but cap it
     let rawMax = 0;
-    for (let i = i0; i < i1; i++) { const f = S[i][1]; if (f !== null && f >= sensorMin && !(hide && hide[i])) rawMax = Math.max(rawMax, u.of(f)); }
+    for (let i = i0; i < i1; i++) { const f = S[i][1]; if (f !== null && f >= sensorMin) rawMax = Math.max(rawMax, u.of(f)); }
     vmax = Math.min(Math.max(vmax, rawMax), u.max * 1.3);
     const yStep = niceStep(vmax, narrow ? 4 : 5);
     vmax = Math.ceil(vmax / yStep - 1e-9) * yStep;
@@ -307,19 +307,30 @@ export class FuelChart {
     if (lvPath) parts.push(`<path class="c-level" d="${lvPath}"/>`);
 
     // The fuel meter: every valid reading as sent, broken at invalid readings and data gaps; a
-    // bright, thick line on a light outline so it stands clear of the grid and the shaded periods
+    // bright, thick line on a light outline so it stands clear of the grid and the shaded periods.
+    // plain: the thick line only for the settled standing readings (the ones the check reads),
+    // every reading as a thin line under it, so the eye still follows the level across a drive
     let rawPath = '';
-    let prevT = null, pen = false;
+    let thinPath = '';
+    let prevT = null, pen = false, penThin = false;
     for (let i = i0; i < i1; i++) {
       const s = S[i];
-      const valid = s[1] !== null && s[1] >= sensorMin && (s[4] === null || s[4] >= powerCut) && !(hide && hide[i]);
-      if (!valid || (prevT !== null && s[0] - prevT > gapMs)) pen = false;
+      const ok = s[1] !== null && s[1] >= sensorMin && (s[4] === null || s[4] >= powerCut);
+      const valid = ok && !(hide && hide[i]);
+      const broke = prevT !== null && s[0] - prevT > gapMs;
+      if (!valid || broke) pen = false;
+      if (!ok || broke) penThin = false;
+      if (hide && ok) {
+        thinPath += `${penThin ? 'L' : 'M'}${r1(sx(s[0]))} ${r1(fy(u.of(s[1])))}`;
+        penThin = true;
+      }
       if (valid) {
         rawPath += `${pen ? 'L' : 'M'}${r1(sx(s[0]))} ${r1(fy(u.of(s[1])))}`;
         pen = true;
       }
       prevT = s[0];
     }
+    if (thinPath) parts.push(`<path class="c-raw-thin" d="${thinPath}"/>`);
     if (rawPath) parts.push(`<path class="c-raw-halo" d="${rawPath}"/><path class="c-raw${fault ? ' fault' : ''}" d="${rawPath}"/>`);
     if (fault && !noFuel) parts.push(`<text class="c-fault" x="${mL + 8}" y="${fy0 + 16}">Мэдрэгчийн гэмтэл — заалт найдваргүй</text>`);
     parts.push('</g>');
@@ -425,8 +436,9 @@ export class FuelChart {
       const tt = s ? s[0] : t;
       const cx = g.sx(tt);
       cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('visibility', 'visible');
-      const left = g.hide && s ? g.hide[i] : 0; // plain: 1 driving, 2 settling after a stop: not drawn
-      const rawValid = s && !left && s[1] !== null && s[1] >= g.sensorMin && (s[4] === null || s[4] >= g.powerCut);
+      const left = g.hide && s ? g.hide[i] : 0; // plain: 1 driving, 2 settling after a stop: thin, not counted
+      const rawOk = s && s[1] !== null && s[1] >= g.sensorMin && (s[4] === null || s[4] >= g.powerCut);
+      const rawValid = rawOk && !left;
       if (rawValid) {
         crossRaw.setAttribute('cx', cx); crossRaw.setAttribute('cy', g.fy(g.u.of(s[1]))); crossRaw.setAttribute('visibility', 'visible');
       } else crossRaw.setAttribute('visibility', 'hidden');
@@ -442,8 +454,8 @@ export class FuelChart {
       rows.push(['time', fmtFull(tt)]);
       if (s) {
         if (rawValid) rows.push(['Тоолуурын заалт', fmtU(s[1]), `${fmtNum(s[1])} мВ${s[2] > 3 ? ' · явж байгаа, савлана' : ''}`, 'raw']);
-        else if (left === 1) rows.push(['Тоолуурын заалт', 'Явж байсан', 'түлш савладаг тул харуулаагүй', 'raw']);
-        else if (left === 2) rows.push(['Тоолуурын заалт', 'Дөнгөж зогссон', `${SETTLE / MIN} мин түлш тогтох хүртэл харуулаагүй`, 'raw']);
+        else if (rawOk && left === 1) rows.push(['Тоолуурын заалт', fmtU(s[1]), 'явж байсан: түлш савладаг тул тооцоонд ороогүй', 'raw']);
+        else if (rawOk && left === 2) rows.push(['Тоолуурын заалт', fmtU(s[1]), `дөнгөж зогссон: ${SETTLE / MIN} мин түлш тогтох хүртэл тооцоонд ороогүй`, 'raw']);
         else if (s[4] !== null && s[4] < g.powerCut) rows.push(['Тоолуурын заалт', 'Тэжээл унтраастай', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
         else rows.push(['Тоолуурын заалт', 'Хүчинтэй заалт алга', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
       }

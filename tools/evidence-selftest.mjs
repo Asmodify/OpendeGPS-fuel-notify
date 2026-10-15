@@ -40,7 +40,7 @@ try {
   const samples = [];
   for (let t = T0 - 2 * 60 * MIN; t <= T0 + 3 * 60 * MIN; t += 2 * MIN) {
     const off = t >= T0 && t < T0 + 40 * MIN;
-    samples.push({ t, f: t < T0 ? 6000 : t < T0 + 40 * MIN ? null : 4400, spd: 0, ign: 0, pwr: off ? 0 : 27000, lat: 43.6 + (t % 7) * 1e-6, lng: 105.5, odo: null });
+    samples.push({ t, f: t < T0 ? 6000 : t < T0 + 40 * MIN ? null : 4400, spd: 0, ign: 0, pwr: off ? 0 : 25500, lat: 43.6 + (t % 7) * 1e-6, lng: 105.5, odo: null }); // 25.5 V: engine off
   }
   db.insertSamples(IMEI, samples);
   db.insertLevel?.(IMEI, T0 - 10 * MIN, 6000);

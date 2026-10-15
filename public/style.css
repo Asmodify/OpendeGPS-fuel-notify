@@ -671,6 +671,7 @@ button.eq-n:hover { border-color: var(--ink-3); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { display: inline-block; flex: none; }
 .lg-raw { width: 22px; height: 4px; border-radius: 2px; background: var(--level-line); }
+.lg-thin { width: 22px; height: 0; border-top: 1.5px solid var(--level-line); opacity: .6; }
 .lg-level { width: 20px; height: 0; border-top: 2px dashed var(--ink-3); }
 .lg-drain { width: 12px; height: 12px; background: color-mix(in srgb, var(--crit) 22%, transparent); border-top: 3px solid var(--crit); }
 .lg-refuel { width: 12px; height: 12px; background: color-mix(in srgb, var(--good) 22%, transparent); border-top: 3px solid var(--good); }
@@ -711,6 +712,7 @@ button.eq-n:hover { border-color: var(--ink-3); }
 .c-raw-halo { fill: none; stroke: var(--surface); stroke-width: 6; stroke-linejoin: round; stroke-linecap: round; opacity: .9; }
 .c-raw { fill: none; stroke: var(--level-line); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
 .c-raw.fault { stroke: var(--ink-3); stroke-dasharray: 6 5; stroke-width: 2; }
+.c-raw-thin { fill: none; stroke: var(--level-line); stroke-width: 1.1; stroke-opacity: .55; stroke-linejoin: round; stroke-linecap: round; }
 .c-level { fill: none; stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 5 4; stroke-linejoin: round; opacity: .85; }
 .c-fault { fill: var(--warn-ink); font-size: 12px; font-weight: 600; }
 .c-hatch { stroke: var(--warn); stroke-width: 1.6; opacity: .5; }

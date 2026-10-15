@@ -84,6 +84,7 @@ body.ev { font-size: 12px; line-height: 1.4; min-height: 0; overflow-x: auto; }
 .fact.bad b { color: var(--crit-ink); }
 .fact.warn b { color: var(--warn-ink); }
 .fact.wide { grid-column: span 2; }
+.fact small { display: block; color: var(--ink-3); font-size: 10px; }
 .fig { break-inside: avoid; }
 .fig-cap { font-size: 10.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 2px; }
 .fig-cap i { display: inline-block; vertical-align: middle; margin: 0 4px 0 6px; }
@@ -97,6 +98,7 @@ body.ev { font-size: 12px; line-height: 1.4; min-height: 0; overflow-x: auto; }
 
 /* legend keys used in text */
 .k-raw { width: 20px; height: 4px; border-radius: 2px; background: var(--level-line); }
+.k-thin { width: 20px; height: 0; border-top: 1.5px solid var(--level-line); opacity: .6; }
 .k-drive { width: 14px; height: 10px; background: color-mix(in srgb, var(--ink-3) 18%, transparent); }
 .k-drain { width: 12px; height: 10px; background: color-mix(in srgb, var(--crit) 22%, transparent); border-top: 2px solid var(--crit); }
 .k-track { width: 18px; height: 3px; border-radius: 2px; background: #1d4ed8; }

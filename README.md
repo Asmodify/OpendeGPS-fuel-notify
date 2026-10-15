@@ -38,12 +38,22 @@ events trigger notifications.
   summary page, then one A4 page per incident with the fuel chart around it, the route on a
   map, the fuel meter's own readings before and after, what the truck did meanwhile (driving,
   top speed, engine, power cut), the fuel receipts of those days and lines for the driver's
-  explanation and signatures. The chart has one fuel line: the meter's raw readings while the
-  truck stood still and the fuel had settled (10 minutes after a stop), with the driving time
-  shaded, and under it the speed and the engine on/off. No average consumption or averaged level
-  is used. Only incidents the fuel meter itself confirms count: a meter that went up (a refuel),
-  dipped and came back, has a broken sensor, has no settled reading before and after, or fell
-  only on the road (that needs an average consumption) is set aside, not shown as theft. A
+  explanation and signatures. The chart has one fuel line, the meter's raw readings: thick
+  while the truck stood still and the fuel had settled (10 minutes after a stop; a short move
+  across a yard does not end a stop), thin while it drove or had just stopped, the driving time
+  shaded, and under it the speed and the engine on/off. No average consumption or averaged
+  level is used. Against the fall stands the most the truck could have burnt meanwhile, a hard
+  ceiling (1.3 L a km or 50 L an hour on the road, 6 L an hour idling with the engine on, 100 L
+  an hour of GPS silence after which the truck turned up elsewhere), and only what fell beyond
+  it counts as lost; so a fall on the road far beyond what the road could burn is theft, and a
+  fall the engine could explain is not. A truck that never stands 10 minutes gets its levels
+  from a sensor that held steady on the move (marked as such, with 5 % of the tank allowed for
+  the difference), a meter that zigzags while standing is a faulty sensor, and a fall under
+  2.5 % of the level (diesel shrinks in the cold) is no fall. Only incidents the fuel meter
+  itself confirms count: a meter that went up (a refuel), dipped and came back within 3 hours,
+  has a broken sensor, has no settled reading before and after, or fell within the ceiling is
+  set aside, not shown as theft; so is an alert a person marked a false alarm, and two alerts
+  of one truck over the same time count once. A
   receipt is short only when the fill is read inside one stop. Each theft alert also has its own "Нотлох баримт" button. The map tiles come from
   OpenStreetMap.
 - **Report** – distance, engine hours and fuel used per vehicle for a period, and the Excel
