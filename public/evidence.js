@@ -133,8 +133,8 @@ function summaryPage(list, now) {
     </table>
     <div class="how">
       <h3>Хэрхэн уншихыг</h3>
-      <p>Тохиолдол бүр дараагийн хуудсуудад нэг A4 хуудастай. Графикт <i class="k-raw"></i><b>улбар шар зузаан шугам</b> нь түлшний тоолуурын (мэдрэгчийн) заалт: GPS төхөөрөмжөөс ирсэн тэр чигээрээ, дундажлаагүй. Машин явж байхад түлш савлаж шугам хэлбэлзэнэ; зогсож байх үеийн заалт түвшинг үнэн харуулна. <i class="k-drain"></i>Улаан бүс нь түлш алдагдсан хугацаа. Доод хэсэгт хурд, хөдөлгүүр, тэжээлийн (масс) төлөв.</p>
-      <p>“Өмнө”, “дараа” нь тохиолдлын өмнөх ба дараах зогсож байх үеийн тоолуурын заалт. “Алдсан” нь тоолуурын бууралт (замд явсан бол замын хэвийн хэрэглээг хассан); системийн тооцоо үүнээс бага бол бага нь. Тоолуур өссөн (цэнэглэлт), буураад буцаж өссөн, эсвэл мэдрэгч гэмтсэн тохиолдлыг хулгайд тооцохгүй, нийтэд оруулахгүй. Литрийг машины савны тохируулгын хүснэгтээр тооцсон. Мэдээллийг GPS төхөөрөмжөөс (fms.gpsbox.mn) авсан, өөрчлөөгүй.</p>
+      <p>Тохиолдол бүр дараагийн хуудсуудад нэг A4 хуудастай. Графикт ганц шугам бий: <i class="k-raw"></i><b>улбар шар шугам</b> нь машин зогсож байх үеийн түлшний тоолуурын (мэдрэгчийн) заалт, GPS төхөөрөмжөөс ирсэн тэр чигээрээ, дундажлаагүй. Машин явж байхад болон зогссоноос хойш 10 минутад түлш савлаж заалт үсэрдэг тул тэр хэсгийг зураагүй, явсан хугацааг <i class="k-drive"></i>саарал бүсээр тэмдэглэсэн. <i class="k-drain"></i>Улаан бүс нь түлш алдагдсан хугацаа. Графикийн доор машины хурд (0 бол зогсож байсан), хөдөлгүүр асаалттай эсэх, тэжээлийн (масс) төлөв.</p>
+      <p>“Өмнө”, “дараа” нь тохиолдлын өмнөх ба дараах зогсож байх үеийн тоолуурын заалт. “Алдсан” нь машин зогсож байхад тоолуур буурсан хэмжээ; системийн тооцоо үүнээс бага бол бага нь. Дундаж хэрэглээ, тооцоолсон түвшин ашиглаагүй. Тоолуур өссөн (цэнэглэлт), буураад буцаж өссөн, мэдрэгч гэмтсэн, эсвэл зөвхөн замд явах үеийн хэрэглээтэй харьцуулж илэрсэн тохиолдлыг хулгайд тооцохгүй, нийтэд оруулахгүй. Литрийг машины савны тохируулгын хүснэгтээр тооцсон. Мэдээллийг GPS төхөөрөмжөөс (fms.gpsbox.mn) авсан, өөрчлөөгүй.</p>
     </div>
     ${pageFoot()}
   </section>`;
@@ -185,11 +185,11 @@ function incidentPage(e, i, n) {
       fact('Тоолуур (өмнө)', L(e.before?.liters, 1)),
       fact('Тоолуур (дараа)', L(e.after?.liters, 1)),
       isNum(fell) ? fact(fell < 0 ? 'Өссөн' : 'Буурсан', L(Math.abs(fell), 1), fell < 0 ? 'good' : '') : '',
-      isNum(m?.used) && m.used > 0 ? fact('Замын хэвийн хэрэглээ', L(m.used, 1)) : '',
     );
   }
   const actFacts = act ? [
     fact('Явсан зам', act.distanceKm > 0 ? `${fmtNum(act.distanceKm, 1)} км (${fmtDur(act.movingMs)})` : 'Зогсож байсан'),
+    act.distanceKm > 0 && isNum(act.maxSpeed) ? fact('Хамгийн их хурд', `${fmtNum(act.maxSpeed)} км/ц`) : '',
     fact('Хөдөлгүүр асаалттай', act.engineOnMs > 0 ? fmtDur(act.engineOnMs) : 'Үгүй'),
     fact('Тэжээл (масс) унтраастай', act.powerOffMs > 0 ? fmtDur(act.powerOffMs) : 'Үгүй', act.powerOffMs > 0 ? 'bad' : ''),
     act.noDataMs > 0 ? fact('GPS мэдээлэлгүй', fmtDur(act.noDataMs), 'warn') : '',
@@ -209,17 +209,16 @@ function incidentPage(e, i, n) {
       ${e.place ? html`<div class="fact wide"><span>Байршил${e.place.source === 'stop' ? ' (зогсож байсан цэг)' : ''}</span><b><a href="${mapsUrl(e.place)}" target="_blank" rel="noopener">${coord(e.place)}</a></b></div>` : ''}
     </div>
     ${e.dataKept ? html`<div class="fig"><div class="fig-cap">Түлшний тоолуурын заалт ба машины төлөв, ${fmtShort(e.from)} — ${fmtShort(e.to)}</div><div class="ev-chart"></div>
-      <div class="legend"><span><i class="lg-raw"></i>Түлшний тоолуурын заалт (GPS-ээс ирсэн тэр чигээрээ)</span><span><i class="lg-drain"></i>Түлш алдагдал</span><span><i class="lg-refuel"></i>Цэнэглэлт</span><span><i class="lg-ign"></i>Хөдөлгүүр</span><span><i class="lg-pwroff"></i>Тэжээл унтраастай</span></div></div>
+      <div class="legend"><span><i class="lg-raw"></i>Түлшний тоолуурын заалт, зогсож байхад (GPS-ээс ирсэн тэр чигээрээ)</span><span><i class="lg-drive"></i>Явж байсан: заалтыг зураагүй</span><span><i class="lg-drain"></i>Энэ тохиолдол</span><span><i class="lg-spd"></i>Хурд</span><span><i class="lg-ign"></i>Хөдөлгүүр асаалттай</span><span><i class="lg-ignoff"></i>унтраастай</span><span><i class="lg-pwroff"></i>Тэжээл унтраастай</span></div></div>
       <div class="fig"><div class="fig-cap">Явсан зам: <i class="k-track"></i>энэ хугацаанд, <i class="k-ev"></i>түлш алдагдсан үед, <i class="k-pin"></i>${e.place?.source === 'stop' ? 'зогсож байсан цэг' : 'илэрсэн цэг'}</div><div class="ev-map"></div></div>`
-    : html`<p class="missing">Энэ үеийн GPS бичлэг хадгалагдаагүй (дэлгэрэнгүй бичлэгийг ${Math.round((e.keepHours || 1464) / 24)} хоног хадгалдаг) — график, газрын зураг гаргах боломжгүй. Дээрх тоо анхааруулга илэрсэн үеийн хэмжилтээс.</p>`}
-    ${a.detail ? html`<p class="detail"><span>Системийн тайлбар:</span> ${a.detail}</p>` : ''}
+    : html`<p class="missing">Энэ үеийн GPS бичлэг хадгалагдаагүй (дэлгэрэнгүй бичлэгийг ${Math.round((e.keepHours || 1464) / 24)} хоног хадгалдаг) — тоолуурын заалт, график, газрын зураг гаргах боломжгүй.</p>`}
     ${e.receipts.length ? html`<div class="fig"><div class="fig-cap">Тэр өдрүүдийн түлшний баримт</div>
       <table class="ev-tbl small">
         <thead><tr><th>Огноо</th><th>Станц</th><th class="num">Баримтад</th><th class="num">Саванд орсон</th><th class="num">Зөрүү</th><th>Дүгнэлт</th></tr></thead>
-        <tbody>${e.receipts.map((r) => html`<tr class="${r.main ? 'main' : ''}"><td class="nowrap">${r.date}${r.dateTo ? `/${r.dateTo.slice(8)}` : ''}${r.time ? ` ${r.time}` : ''}</td><td>${r.station || (r.source === 'opentee' ? 'Жолоочийн апп' : '—')}</td>
+        <tbody>${e.receipts.map((r0) => { const r = rcRow(r0, e); return html`<tr class="${r.main ? 'main' : ''}"><td class="nowrap">${r.date}${r.dateTo ? `/${r.dateTo.slice(8)}` : ''}${r.time ? ` ${r.time}` : ''}</td><td>${r.station || (r.source === 'opentee' ? 'Жолоочийн апп' : '—')}</td>
           <td class="num">${L(r.litres, 1)}</td><td class="num">${r.refuel ? L(r.refuel.wentIn, 1) : '—'}</td>
-          <td class="num ${r.status === 'short' || r.status === 'norefuel' ? 'bad' : ''}">${r.status === 'norefuel' ? L(r.litres, 1) : isNum(r.missing) ? L(r.missing, 1) : '—'}</td>
-          <td>${RC_STATUS[r.status] || r.status}${r.nofit ? ' · саванд багтахгүй' : ''}</td></tr>`)}</tbody>
+          <td class="num ${r.status === 'short' || r.status === 'norefuel' ? 'bad' : ''}">${r.status === 'norefuel' && !isNum(r.missing) ? L(r.litres, 1) : isNum(r.missing) ? L(r.missing, 1) : '—'}</td>
+          <td>${r.statusText || RC_STATUS[r.status] || r.status}${r.nofit ? ' · саванд багтахгүй' : ''}</td></tr>`; })}</tbody>
       </table></div>` : ''}
     ${a.note ? html`<p class="detail"><span>Шалгасан хүний тэмдэглэл:</span> ${a.note}</p>` : ''}
     <div class="sign">
@@ -235,11 +234,24 @@ function incidentPage(e, i, n) {
   </section>`;
 }
 
+/** The receipt this page is about reads what the fuel meter shows (as the facts above), not the
+ *  receipt matcher's own figures. */
+function rcRow(r, e) {
+  const m = e.meter;
+  if (!r.main || e.alert.type !== 'receipt_mismatch' || !m) return r;
+  if (m.verdict === 'short' || m.verdict === 'full' || m.verdict === 'norefuel') {
+    return { ...r, refuel: m.wentIn > 0 ? { wentIn: m.wentIn } : null, missing: m.verdict === 'full' ? 0 : m.lost, status: m.verdict === 'full' ? 'ok' : m.verdict };
+  }
+  return { ...r, refuel: null, missing: null, status: m.verdict, statusText: meterLabel(e) };
+}
+
 // ---------------------------------------------------------------- chart + map
 function drawChart(host, e) {
-  const chart = new FuelChart(host, { fuelHeight: 150, levels: false }); // the meter only: no averaged line
+  // the meter only, standing still: no averaged level, no speed graph, no other alerts' marks
+  const chart = new FuelChart(host, { fuelHeight: 150, levels: false, plain: true });
+  const own = (e.alerts || []).filter((x) => x.id === e.alert.id);
   chart.setData({
-    samples: e.samples, levels: e.levels, alerts: e.alerts, from: e.from, to: e.to,
+    samples: e.samples, levels: e.levels, alerts: own.length ? own : [e.alert], from: e.from, to: e.to,
     cal: normCal(e.cal), th: e.th || {}, hasFuel: e.vehicle.hasFuel, sensorOk: true, typeLabel,
   });
   chart.ro.disconnect(); // drawn once for the sheet's width: printing must not redraw it

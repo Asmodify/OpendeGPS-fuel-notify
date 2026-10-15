@@ -97,6 +97,7 @@ body.ev { font-size: 12px; line-height: 1.4; min-height: 0; overflow-x: auto; }
 
 /* legend keys used in text */
 .k-raw { width: 20px; height: 4px; border-radius: 2px; background: var(--level-line); }
+.k-drive { width: 14px; height: 10px; background: color-mix(in srgb, var(--ink-3) 18%, transparent); }
 .k-drain { width: 12px; height: 10px; background: color-mix(in srgb, var(--crit) 22%, transparent); border-top: 2px solid var(--crit); }
 .k-track { width: 18px; height: 3px; border-radius: 2px; background: #1d4ed8; }
 .k-ev { width: 18px; height: 4px; border-radius: 2px; background: #dc2626; }

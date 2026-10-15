@@ -72,7 +72,7 @@ const at = (rows, i) => rows[i].t;
   const t0 = T - 22 * MIN;
   const t = T + 104 * MIN;
   const m = meterCheck({ kind: 'trip', rows, t0, t, amountL: 100, fromMv: mv(400), toMv: mv(250), cal, th });
-  check('trip excess -> drop of the excess', m.verdict === 'drop' && Math.abs(m.lost - 100) < 1 && Math.abs(m.used - 50) < 1, m);
+  check('trip excess -> set aside (rests on an average consumption), no litres claimed', m.verdict === 'trip' && !CONFIRMS.has(m.verdict) && m.lost === undefined && m.used === undefined && Math.abs(m.fell - 150) < 2, m);
   const refuel = series(T - 7 * HOUR, [{ min: 400, from: 300 }, { min: 120, from: 300, to: 260, spd: 60 }, { min: 10, from: 260, to: 460 }, { min: 400, from: 460 }]);
   const r = meterCheck({ kind: 'trip', rows: refuel, t0, t: T + 114 * MIN, amountL: 80, fromMv: mv(300), toMv: mv(160), cal, th });
   check('trip ending fuller -> refuel', r.verdict === 'refuel', r);
@@ -134,6 +134,26 @@ const at = (rows, i) => rows[i].t;
   check('receipt without a tank table -> nodata', noTable.verdict === 'nodata', noTable);
 }
 
+// 8b. a "drain" right after the truck pulled up: the fuel was still settling, no settled level before it
+{
+  const rows = series(T - 7 * HOUR, [{ min: 417, from: 420, to: 410, spd: 60 }, { min: 5, from: 410, to: 388 }, { min: 300, from: 388 }]);
+  const m = meterCheck({ kind: 'parked', rows, t0: T, t: T + 5 * MIN, amountL: 22, cal, th });
+  check('drop in the first minutes of a stop -> no settled level, not evidence', !CONFIRMS.has(m.verdict) && m.verdict === 'nodata', m);
+}
+// 8c. receipts read only settled levels: a stop's first minutes at the top of the scale are not a fill,
+// and a fill at a pump stop too short to settle is never called short
+{
+  const day = Date.UTC(2026, 9, 9, 16, 0); // 00:00 local
+  const foam = series(day - 7 * HOUR, [{ min: 600, from: 300 }, { min: 300, from: 300, to: 250, spd: 50 }, { min: 8, from: 0, mv: 9175 }, { min: 600, from: 250 }]);
+  const f = meterCheck({ kind: 'receipt', rows: foam, t0: day, t: day, receiptL: 300, dayOnly: true, cal, th });
+  check('9 V readings just after a drive are no fill, and no "no refuel" claim either', !CONFIRMS.has(f.verdict) && f.verdict === 'nodata' && !(f.after?.v > 400), f);
+  const pump = series(T - 7 * HOUR, [{ min: 400, from: 200 }, { min: 30, from: 200, to: 190, spd: 50 }, { min: 6, from: 190, to: 390 }, { min: 30, from: 390, to: 380, spd: 50 }, { min: 400, from: 380 }]);
+  const pu = meterCheck({ kind: 'receipt', rows: pump, t0: T - 7 * HOUR + 430 * MIN, t: T - 7 * HOUR + 436 * MIN, receiptL: 300, missingL: 120, refuelSeen: true, cal, th });
+  check('fill at a 6 min pump stop, its rise only seen across the drives -> not short', !CONFIRMS.has(pu.verdict), pu);
+  const queue = series(T - 7 * HOUR, [{ min: 400, from: 200 }, { min: 30, from: 200, to: 185, spd: 50 }, { min: 20, from: 185 }, { min: 6, from: 185, to: 285 }, { min: 20, from: 285 }, { min: 300, from: 285, to: 200, spd: 50 }]);
+  const q = meterCheck({ kind: 'receipt', rows: queue, t0: T - 7 * HOUR + 450 * MIN, t: T - 7 * HOUR + 456 * MIN, receiptL: 300, missingL: 200, refuelSeen: true, cal, th });
+  check('fill measured inside one stop (settled before and after) -> short, from that stop\'s levels', q.verdict === 'short' && Math.abs(q.wentIn - 100) < 3 && Math.abs(q.before.v - 185) < 3, q);
+}
 // 9. the fleet screen's probe check over a day of readings
 {
   const day = T - 24 * HOUR;

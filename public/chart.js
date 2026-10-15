@@ -3,11 +3,15 @@
 //      the detector's settled levels (thin dashed line; opts.levels === false leaves it out),
 //      alert markers, shaded periods where the sensor gave no valid reading while powered.
 //   2. Activity band: speed area, engine (ignition) strip, tracker power strip.
+// opts.plain (evidence pages): the meter only while standing still and settled (driving readings
+// and the first SETTLE minutes after a stop slosh and are left out, the driving time shaded grey
+// instead), a plain speed lane and the engine strip under it, no marker lines.
 // Crosshair tooltip on hover/tap, drag (mouse) to zoom, double-click to reset.
 import { fmtFull, fmtDayShort, fmtClock, fmtNum, mvToPct, isNum, fuelAmount } from './util.js';
 
 let uidSeq = 0;
 const MIN = 60e3, HOUR = 3600e3, DAY = 864e5;
+const SETTLE = 10 * MIN; // as src/meter.js: fuel sloshes for minutes after the truck pulls up
 
 function bisect(arr, t) {
   // index of first element with arr[i][0] >= t
@@ -176,8 +180,9 @@ export class FuelChart {
     const topRow = 20; // alert markers
     const fuelH = this.opts.fuelHeight || (narrow ? 170 : 230); // opts.fuelHeight: printed pages
     const fy0 = topRow, fy1 = topRow + fuelH;
-    const gap = 16;
-    const spH = 34, stripH = 7, stripGap = 4;
+    const plain = this.opts.plain === true;
+    const gap = plain ? 10 : 16;
+    const spH = plain ? 40 : 34, stripH = plain ? 9 : 7, stripGap = 4;
     const sy0 = fy1 + gap, sy1 = sy0 + spH;
     const iy0 = sy1 + stripGap, iy1 = iy0 + stripH;
     const py0 = iy1 + stripGap, py1 = py0 + stripH;
@@ -194,6 +199,17 @@ export class FuelChart {
     const S = d.samples;
     const i0 = Math.max(0, bisect(S, v0) - 1);
     const i1 = Math.min(S.length, bisect(S, v1) + 1);
+    // plain: which readings the meter line leaves out (driving, or less than SETTLE after it)
+    const hide = plain ? new Uint8Array(S.length) : null;
+    if (plain) {
+      // as src/meter.js: moving = 3 km/h or more; driving = two moving readings in a row (one is GPS jitter)
+      const mv = (i) => i >= 0 && i < S.length && S[i][2] !== null && S[i][2] >= 3;
+      let lastDrive = -Infinity;
+      for (let i = 0; i < i1; i++) {
+        if (mv(i) && (mv(i - 1) || mv(i + 1))) lastDrive = S[i][0];
+        hide[i] = mv(i) ? 1 : S[i][0] - lastDrive < SETTLE ? 2 : 0; // 1 moving, 2 settling after a stop
+      }
+    }
     const L = d.levels;
     const l0 = Math.max(0, bisect(L, v0) - 1);
     const l1 = Math.min(L.length, bisect(L, v1) + 1);
@@ -203,7 +219,7 @@ export class FuelChart {
     for (let i = l0; i < l1; i++) vmax = Math.max(vmax, u.of(L[i][1]));
     // raw readings may slosh above full; allow some headroom but cap it
     let rawMax = 0;
-    for (let i = i0; i < i1; i++) { const f = S[i][1]; if (f !== null && f >= sensorMin) rawMax = Math.max(rawMax, u.of(f)); }
+    for (let i = i0; i < i1; i++) { const f = S[i][1]; if (f !== null && f >= sensorMin && !(hide && hide[i])) rawMax = Math.max(rawMax, u.of(f)); }
     vmax = Math.min(Math.max(vmax, rawMax), u.max * 1.3);
     const yStep = niceStep(vmax, narrow ? 4 : 5);
     vmax = Math.ceil(vmax / yStep - 1e-9) * yStep;
@@ -237,7 +253,10 @@ export class FuelChart {
       parts.push(`<text class="c-xlab${tk.major ? ' major' : ''}" x="${x}" y="${axisY + 12}" text-anchor="middle">${tk.label}</text>`);
     }
     // strip labels
-    parts.push(`<text class="c-slab" x="${mL - 6}" y="${sy0 + 10}" text-anchor="end">км/ц</text>`);
+    if (plain) {
+      parts.push(`<text class="c-slab" x="${mL - 6}" y="${sy0 + 10}" text-anchor="end">Хурд</text>`);
+      parts.push(`<text class="c-slab" x="${mL - 6}" y="${sy0 + 22}" text-anchor="end">км/ц</text>`);
+    } else parts.push(`<text class="c-slab" x="${mL - 6}" y="${sy0 + 10}" text-anchor="end">км/ц</text>`);
     parts.push(`<text class="c-slab" x="${mL - 6}" y="${iy1}" text-anchor="end">Хөдөлгүүр</text>`);
     parts.push(`<text class="c-slab" x="${mL - 6}" y="${py1}" text-anchor="end">Тэжээл</text>`);
     parts.push(`<rect class="c-strip-bg" x="${mL}" y="${iy0}" width="${plotW}" height="${stripH}" rx="2"/>`);
@@ -257,6 +276,13 @@ export class FuelChart {
     for (const [a, b] of nosig) {
       const x0 = sx(a), x1 = Math.max(sx(b), x0 + 1.5);
       bandParts.push(`<rect class="c-nosig" x="${r1(x0)}" y="${fy0}" width="${r1(x1 - x0)}" height="${fuelH}" fill="url(#${uid}-hatch)"/>`);
+    }
+    // plain: driving time shaded grey (the meter is not drawn there)
+    if (plain) {
+      for (const [a, c] of runs(S, (s) => s[2] !== null && s[2] >= 3, gapMs, i0, i1)) {
+        const x0 = sx(a), x1 = Math.max(sx(c), x0 + 1.5);
+        bandParts.push(`<rect class="c-drive" x="${r1(x0)}" y="${fy0}" width="${r1(x1 - x0)}" height="${fuelH}"/>`);
+      }
     }
     // Spans for drain/refuel alerts (fromT → t)
     for (const a of d.alerts) {
@@ -286,7 +312,7 @@ export class FuelChart {
     let prevT = null, pen = false;
     for (let i = i0; i < i1; i++) {
       const s = S[i];
-      const valid = s[1] !== null && s[1] >= sensorMin && (s[4] === null || s[4] >= powerCut);
+      const valid = s[1] !== null && s[1] >= sensorMin && (s[4] === null || s[4] >= powerCut) && !(hide && hide[i]);
       if (!valid || (prevT !== null && s[0] - prevT > gapMs)) pen = false;
       if (valid) {
         rawPath += `${pen ? 'L' : 'M'}${r1(sx(s[0]))} ${r1(fy(u.of(s[1])))}`;
@@ -312,10 +338,15 @@ export class FuelChart {
       lastX = x; prevT = s[0];
     }
     if (segStart !== null) spPath += `L${lastX} ${sy1}Z`;
+    if (plain) {
+      // speed lane: 0 = standing; its top line and value say the scale
+      b.push(`<line class="c-grid" x1="${mL}" x2="${W - mR}" y1="${sy0}" y2="${sy0}"/>`);
+      b.push(`<text class="c-slab" x="${W - mR - 3}" y="${sy0 + 10}" text-anchor="end">${spMax} км/ц</text>`);
+    }
     b.push(`<line class="c-base" x1="${mL}" x2="${W - mR}" y1="${sy1}" y2="${sy1}"/>`);
-    if (spPath) b.push(`<path class="c-speed" d="${spPath}"/>`);
+    if (spPath) b.push(`<path class="${plain ? 'c-spd' : 'c-speed'}" d="${spPath}"/>`);
     const ovs = Number(th.overspeedKmh);
-    if (isNum(ovs) && ovs < spMax) b.push(`<line class="c-ovs" x1="${mL}" x2="${W - mR}" y1="${r1(spy(ovs))}" y2="${r1(spy(ovs))}"><title>Хурдны хязгаар ${ovs} км/ц</title></line>`);
+    if (isNum(ovs) && ovs < spMax && !plain) b.push(`<line class="c-ovs" x1="${mL}" x2="${W - mR}" y1="${r1(spy(ovs))}" y2="${r1(spy(ovs))}"><title>Хурдны хязгаар ${ovs} км/ц</title></line>`);
     for (const [a, c] of runs(S, (s) => s[3] === 1, gapMs, i0, i1)) {
       const x0 = sx(a), x1 = Math.max(sx(c), x0 + 1.5);
       b.push(`<rect class="c-ign" x="${r1(x0)}" y="${iy0}" width="${r1(x1 - x0)}" height="${stripH}"/>`);
@@ -347,7 +378,7 @@ export class FuelChart {
       const x = r1(sx(t));
       const sev = a.severity || 'info';
       const kind = a.type === 'fuel_drain' ? 'drain' : a.type === 'refuel' ? 'refuel' : sev;
-      mk.push(`<line class="c-mk-line ${kind}" x1="${x}" x2="${x}" y1="${fy0 + 2}" y2="${fy1}"/>`);
+      if (!plain) mk.push(`<line class="c-mk-line ${kind}" x1="${x}" x2="${x}" y1="${fy0 + 2}" y2="${fy1}"/>`);
       let shape;
       const y = 9;
       if (kind === 'drain') shape = `<path class="c-mk drain" d="M${x - 6} ${y - 5}L${x + 6} ${y - 5}L${x} ${y + 6}Z"/>`;
@@ -361,7 +392,7 @@ export class FuelChart {
     const aria = `Түлшний тоолуурын график, ${fmtFull(v0)} – ${fmtFull(v1)}. Тоолуурын заалт: ${Math.max(0, i1 - i0)}, анхааруулга: ${visAlerts.length}.`;
     this.wrap.innerHTML = `<svg class="fchart-el" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="group" aria-label="${aria.replace(/"/g, '')}">${parts.join('')}</svg>`;
     const svg = this.wrap.firstChild;
-    this.geo = { W, H, mL, mR, plotW, fy0, fy1, py1, sx, fy, u, v0, v1, i0, i1, sensorMin, powerCut, showLevels };
+    this.geo = { W, H, mL, mR, plotW, fy0, fy1, py1, sx, fy, u, v0, v1, i0, i1, sensorMin, powerCut, showLevels, plain, hide };
     this.bind(svg);
   }
 
@@ -394,7 +425,8 @@ export class FuelChart {
       const tt = s ? s[0] : t;
       const cx = g.sx(tt);
       cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('visibility', 'visible');
-      const rawValid = s && s[1] !== null && s[1] >= g.sensorMin && (s[4] === null || s[4] >= g.powerCut);
+      const left = g.hide && s ? g.hide[i] : 0; // plain: 1 driving, 2 settling after a stop: not drawn
+      const rawValid = s && !left && s[1] !== null && s[1] >= g.sensorMin && (s[4] === null || s[4] >= g.powerCut);
       if (rawValid) {
         crossRaw.setAttribute('cx', cx); crossRaw.setAttribute('cy', g.fy(g.u.of(s[1]))); crossRaw.setAttribute('visibility', 'visible');
       } else crossRaw.setAttribute('visibility', 'hidden');
@@ -410,6 +442,8 @@ export class FuelChart {
       rows.push(['time', fmtFull(tt)]);
       if (s) {
         if (rawValid) rows.push(['Тоолуурын заалт', fmtU(s[1]), `${fmtNum(s[1])} мВ${s[2] > 3 ? ' · явж байгаа, савлана' : ''}`, 'raw']);
+        else if (left === 1) rows.push(['Тоолуурын заалт', 'Явж байсан', 'түлш савладаг тул харуулаагүй', 'raw']);
+        else if (left === 2) rows.push(['Тоолуурын заалт', 'Дөнгөж зогссон', `${SETTLE / MIN} мин түлш тогтох хүртэл харуулаагүй`, 'raw']);
         else if (s[4] !== null && s[4] < g.powerCut) rows.push(['Тоолуурын заалт', 'Тэжээл унтраастай', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
         else rows.push(['Тоолуурын заалт', 'Хүчинтэй заалт алга', s[1] !== null ? `${fmtNum(s[1])} мВ` : '', 'raw']);
       }

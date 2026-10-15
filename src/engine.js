@@ -1540,8 +1540,16 @@ export class Engine {
     const t0 = Number.isFinite(row.from_t) && row.from_t < t ? row.from_t : t;
     // the chart: the event with a margin either side (more for long events, up to 12 h)
     const pad = clamp((t - t0) * 0.4, 3 * HOUR, 12 * HOUR);
-    const from = t0 - pad;
-    const to = Math.min(Math.max(now, t), t + pad);
+    let from = t0 - pad;
+    let to = Math.min(Math.max(now, t), t + pad);
+    // ...and the meter readings the page quotes (a receipt with only its date can find its refuel
+    // hours away from the alert): the chart must show the levels the facts give
+    const meter = this.meterFor(row);
+    const quoted = [meter?.before?.t, meter?.after?.t].filter(Number.isFinite);
+    if (quoted.length) {
+      from = Math.min(from, Math.min(...quoted) - HOUR);
+      to = Math.max(to, Math.min(Math.max(...quoted) + HOUR, Math.max(now, t)));
+    }
     const rows = imei ? this.db.samplesRange(imei, from, to) : [];
     const levels = imei ? this.db.levelsRange(imei, from, to).map((r) => [r.t, round(r.mv)]) : [];
     const L = (mv) => {
@@ -1562,13 +1570,13 @@ export class Engine {
     } else if (row.type === 'receipt_mismatch') {
       lostL = alert.receipt.missing;
     }
-    // what the fuel meter itself shows: its readings are the levels before / after, and only a
-    // loss it confirms has litres (a refuel, a dip that came back or a sensor fault has none)
-    const meter = this.meterFor(row);
+    // what the fuel meter itself shows: its readings are the levels before / after (none where it
+    // has no settled standing reading: never the detector's averaged levels), and only a loss it
+    // confirms has litres (a refuel, a dip that came back or a sensor fault has none)
     if (meter) {
       const lv = (m) => (m ? { t: m.t, mv: m.mv, liters: meter.unit === 'L' ? m.v : L(m.mv) } : null);
-      if (meter.before) before = lv(meter.before);
-      if (meter.after) after = lv(meter.after);
+      before = lv(meter.before);
+      after = lv(meter.after);
       lostL = CONFIRMS.has(meter.verdict) && meter.unit === 'L' && Number.isFinite(meter.lost) ? meter.lost : null;
     }
 

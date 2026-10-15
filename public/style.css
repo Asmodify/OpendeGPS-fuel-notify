@@ -675,7 +675,10 @@ button.eq-n:hover { border-color: var(--ink-3); }
 .lg-drain { width: 12px; height: 12px; background: color-mix(in srgb, var(--crit) 22%, transparent); border-top: 3px solid var(--crit); }
 .lg-refuel { width: 12px; height: 12px; background: color-mix(in srgb, var(--good) 22%, transparent); border-top: 3px solid var(--good); }
 .lg-nosig { width: 14px; height: 12px; background: repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--warn) 60%, transparent) 3px 5px); border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent); }
+.lg-drive { width: 14px; height: 12px; background: color-mix(in srgb, var(--ink-3) 18%, transparent); }
 .lg-ign { width: 16px; height: 7px; border-radius: 2px; background: var(--good); }
+.lg-ignoff { width: 16px; height: 7px; border-radius: 2px; background: var(--surface-3); border: 1px solid var(--line-2); }
+.lg-spd { width: 16px; height: 10px; background: color-mix(in srgb, var(--ink-2) 16%, transparent); border-top: 1.5px solid var(--ink-2); }
 .lg-pwroff { width: 16px; height: 7px; border-radius: 2px; background: repeating-linear-gradient(45deg, var(--surface-3) 0 2px, var(--ink-3) 2px 3.5px); }
 .d-chart { position: relative; min-height: 340px; }
 .d-chart.loading::after { content: "Loading history…"; position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--ink-2); font-weight: 600; z-index: 3; }
@@ -714,8 +717,10 @@ button.eq-n:hover { border-color: var(--ink-3); }
 .c-hatch2 { stroke: var(--ink-3); stroke-width: 1.3; }
 .c-nosig { opacity: .9; }
 .c-span.drain { fill: var(--crit); opacity: .1; }
+.c-drive { fill: var(--ink-3); opacity: .1; }
 .c-span.refuel { fill: var(--good); opacity: .1; }
 .c-speed { fill: var(--speed); fill-opacity: .4; stroke: var(--speed); stroke-width: 1; stroke-linejoin: round; }
+.c-spd { fill: var(--ink-2); fill-opacity: .16; stroke: var(--ink-2); stroke-width: 1.2; stroke-linejoin: round; }
 .c-ovs { stroke: var(--crit); stroke-width: 1; stroke-dasharray: 3 3; opacity: .55; }
 .c-strip-bg { fill: var(--surface-3); }
 .c-ign { fill: var(--good); }
@@ -834,7 +839,7 @@ button.eq-n:hover { border-color: var(--ink-3); }
   .search { max-width: none; flex-basis: 100%; }
   .filters select { flex: 1 1 140px; }
   .filter-count { margin-left: 0; }
-  .c-speed, .c-seen, .d-only, .fleet-tbl .c-status, .fleet-tbl .c-gps { display: none; }
+  .tbl .c-speed, .c-seen, .d-only, .fleet-tbl .c-status, .fleet-tbl .c-gps { display: none; }
   .equip-card { padding: 10px 12px 6px; }
   /* phones: each device on its own block, its four numbers in a row under it, each with its caption */
   .eq-tbl, .eq-tbl tbody { display: block; width: 100%; }

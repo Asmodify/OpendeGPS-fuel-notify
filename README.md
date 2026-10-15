@@ -37,10 +37,14 @@ events trigger notifications.
   by vehicle, group, dates and tick boxes, then printed together (or saved as one PDF): a
   summary page, then one A4 page per incident with the fuel chart around it, the route on a
   map, the fuel meter's own readings before and after, what the truck did meanwhile (driving,
-  engine, power cut), the fuel receipts of those days and lines for the driver's explanation
-  and signatures. Only incidents the fuel meter itself confirms are listed by default: a meter
-  that went up (a refuel), dipped and came back, or has a broken sensor is set aside, not shown
-  as theft. Each theft alert also has its own "Нотлох баримт" button. The map tiles come from
+  top speed, engine, power cut), the fuel receipts of those days and lines for the driver's
+  explanation and signatures. The chart has one fuel line: the meter's raw readings while the
+  truck stood still and the fuel had settled (10 minutes after a stop), with the driving time
+  shaded, and under it the speed and the engine on/off. No average consumption or averaged level
+  is used. Only incidents the fuel meter itself confirms count: a meter that went up (a refuel),
+  dipped and came back, has a broken sensor, has no settled reading before and after, or fell
+  only on the road (that needs an average consumption) is set aside, not shown as theft. A
+  receipt is short only when the fill is read inside one stop. Each theft alert also has its own "Нотлох баримт" button. The map tiles come from
   OpenStreetMap.
 - **Report** – distance, engine hours and fuel used per vehicle for a period, and the Excel
   fuel ledger (below).

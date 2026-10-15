@@ -4,8 +4,10 @@
 // fault or a drop the meter does not show is never presented as theft.
 //
 // verdict
-//   drop       the meter fell (trip: by more than the trip used); lost = the smaller of that fall
-//              and the alert's amount, so evidence never claims more than either shows
+//   drop       the meter fell while the truck stood still; lost = the smaller of that fall and
+//              the alert's amount, so evidence never claims more than either shows
+//   trip       on the road the meter fell by more than the detector allowed for the trip: that
+//              rests on an average consumption, not on the meter alone, so it is set aside
 //   refuel     the meter went up, not down: a refuel, not theft
 //   recovered  the meter dipped and came back up: not a loss
 //   no_drop    the meter shows no fall of that size
@@ -14,7 +16,8 @@
 //   full       receipt: the meter rose by (about) the receipt's litres
 //   sensor     readings at the sensor's 10 V limit or outside the tank, or a meter that never
 //              moves while the truck drives
-//   nodata     too few readings standing still to tell
+//   nodata     too few settled readings standing still to tell (a receipt: or the fill was at a
+//              stop too short to read, its rise only seen across a drive)
 import { litersAt } from './ledger.js';
 
 const MIN = 60e3;
@@ -22,6 +25,7 @@ const HOUR = 60 * MIN;
 const MOVE_KMH = 3;
 const LOOK = 6 * HOUR; // how far back / ahead the level before / after may be taken
 const NEAR = 5; // readings nearest the event that make the level before / after
+const SETTLE = 10 * MIN; // fuel sloshes for minutes after the truck pulls up: no level before that
 const PEGGED_MV = 9950; // the probes are 0-10 V: a reading at the limit is a wiring fault, not a level
 export const CONFIRMS = new Set(['drop', 'short', 'norefuel']);
 
@@ -118,7 +122,16 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
 
   // a driving run = two moving readings in a row (one is GPS jitter at a stop)
   const drivingAt = (i) => moving(rows[i]) && ((i > 0 && moving(rows[i - 1])) || (i + 1 < rows.length && moving(rows[i + 1])));
-  /** Standing-still readings next to `edge`, back to (dir -1) or on from (dir +1) the nearest driving. */
+  // how long the truck had been standing at each reading (since its last driving)
+  const stood = new Array(rows.length);
+  let lastDrive = -Infinity;
+  for (let i = 0; i < rows.length; i++) {
+    if (drivingAt(i)) lastDrive = rows[i].t;
+    stood[i] = rows[i].t - lastDrive;
+  }
+  /** Settled standing-still readings next to `edge`, back to (dir -1) or on from (dir +1) the
+   *  nearest driving. Readings in the first SETTLE of a stop are skipped: the fuel is still
+   *  settling, and a level taken then would show a "drop" that is only sloshing. */
   const nearStill = (edge, dir) => {
     const got = [];
     let i = dir < 0 ? lastIdx(rows, edge) : firstIdx(rows, edge);
@@ -126,7 +139,7 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
       const s = rows[i];
       if (Math.abs(s.t - edge) > LOOK) break;
       if (drivingAt(i)) break;
-      if (valid(s) && !moving(s)) got.push(s);
+      if (valid(s) && !moving(s) && stood[i] >= SETTLE) got.push(s);
     }
     return dir < 0 ? got.reverse() : got;
   };
@@ -140,7 +153,17 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
     const from = refuelSeen ? t0 - 3 * HOUR : dayOnly ? t - 6 * HOUR : t - 4 * HOUR;
     const to = refuelSeen ? t + 3 * HOUR : dayOnly ? t + 30 * HOUR : t + 4 * HOUR;
     const win = span(from, to);
-    const still = win.filter((s) => valid(s) && !moving(s));
+    // settled standing readings only, as for a drain: a reading in the first minutes of a stop
+    // can sit at the top of the scale and would pass for a fill
+    const still = [];
+    const drove = [0]; // drives up to each of them, so a rise across a drive can be told
+    let drives = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const s = rows[i];
+      if (s.t < from || s.t > to) continue;
+      if (drivingAt(i) && !(i > 0 && drivingAt(i - 1))) drives++;
+      if (valid(s) && !moving(s) && stood[i] >= SETTLE) { still.push(s); drove[still.length - 1] = drives; }
+    }
     if (still.length < 3) return out('nodata');
     if (pegged(win)) return out('sensor', { note: 'limit' });
     const m = smooth(still.map((s) => val(s.f)));
@@ -150,17 +173,40 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
     if (stuck(win) || stuck(tail)) return out('sensor', { note: 'stuck' });
     const { rise, rise0, rise1 } = swings(m);
     const tol = Math.max(40, receiptL * 0.15); // tank tables are 10-15 % off near the top; fills splash
-    if (rise >= Math.max(30, receiptL * 0.25)) {
-      // the refuel itself: the meter at the bottom and at the top of its largest rise
-      const before = { t: still[rise0].t, mv: still[rise0].f, v: round1(m[rise0]) };
-      const after = { t: still[rise1].t, mv: still[rise1].f, v: round1(m[rise1]) };
-      const lost = Math.min(receiptL - rise, capped(missingL));
+    const need = Math.max(30, receiptL * 0.25);
+    if (rise >= need) {
+      // the refuel itself: the meter at the bottom and at the top of its largest rise, inside one
+      // stop where it can (no drive between: the fill measured whole)
+      let r = { rise, v0: m[rise0], v1: m[rise1], i0: rise0, i1: rise1 };
+      let one = drove[rise0] === drove[rise1];
+      for (let a = 0; !one && a < still.length;) {
+        let b = a;
+        while (b + 1 < still.length && drove[b + 1] === drove[a]) b++;
+        const g = smooth(still.slice(a, b + 1).map((s) => val(s.f)));
+        const sw = swings(g);
+        // the stop's own rise is the fill when it is (about) all of the rise across the drives
+        if (sw.rise >= rise - Math.max(20, rise * 0.15) && sw.rise >= need) {
+          r = { rise: sw.rise, v0: g[sw.rise0], v1: g[sw.rise1], i0: a + sw.rise0, i1: a + sw.rise1 };
+          one = true;
+        }
+        a = b + 1;
+      }
+      const before = { t: still[r.i0].t, mv: still[r.i0].f, v: round1(r.v0) };
+      const after = { t: still[r.i1].t, mv: still[r.i1].f, v: round1(r.v1) };
+      const lost = Math.min(receiptL - r.rise, capped(missingL));
+      // the rise only seen across a drive (filled at a stop too short for a settled reading):
+      // more went in than it shows (the drive burnt some), so only "all of it" can be told
+      if (!one && lost > tol) return out('nodata', { wentIn: round1(r.rise), before, after });
       return lost > tol
-        ? out('short', { wentIn: round1(rise), lost: round1(lost), before, after })
-        : out('full', { wentIn: round1(rise), before, after });
+        ? out('short', { wentIn: round1(r.rise), lost: round1(lost), before, after })
+        : out('full', { wentIn: round1(r.rise), before, after });
     }
     const before = withVal(level(still.slice(0, NEAR)));
     const after = withVal(level(still.slice(-NEAR)));
+    // "no refuel at all" only when no standing reading, settled or not, shows a fill either: a
+    // short stop at the pump has none settled
+    const any = smooth(win.filter((s) => valid(s) && !moving(s)).map((s) => val(s.f)));
+    if (swings(any).rise >= need) return out('nodata', { before, after });
     const lost = Math.min(receiptL - Math.max(0, rise), capped(missingL));
     return out('norefuel', { wentIn: round1(Math.max(0, rise)), lost: round1(lost), before, after });
   }
@@ -182,9 +228,11 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
     const used = Math.max(0, (hasL ? val(fromMv) - val(toMv) : fromMv - toMv) - amount);
     const fell = before.v - after.v;
     const excess = fell - used;
-    if (excess >= need) return out('drop', { lost: round1(Math.min(amount, excess)), fell: round1(fell), used: round1(used), before, after });
+    // strict: a fall on the road is only "too much" against an average consumption, which is no
+    // proof; never theft evidence on its own
+    if (excess >= need) return out('trip', { fell: round1(fell), before, after });
     if (fell <= -minU) return out('refuel', { fell: round1(fell), before, after });
-    return out('no_drop', { fell: round1(fell), used: round1(used), before, after });
+    return out('no_drop', { fell: round1(fell), before, after });
   }
 
   // at a stop: the meter while standing still, from just before the event to just after it
@@ -197,6 +245,8 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
   const { drop, rise } = swings(m);
   // what the meter shows from before to after (to the last reading at the stop if none after)
   const fell = before && after ? before.v - after.v : (before ? before.v : m[0]) - m[m.length - 1];
+  // strict: a theft needs a settled level both before and after it
+  if (fell >= need && !(before && after)) return out('nodata', { fell: round1(fell), before, after });
   if (fell >= need) return out('drop', { lost: round1(Math.min(capped(amount), fell)), fell: round1(fell), drop: round1(drop), rise: round1(rise), before, after });
   if (fell <= -minU) return out('refuel', { fell: round1(fell), rise: round1(rise), before, after });
   if (rise >= need) return out('recovered', { fell: round1(fell), drop: round1(drop), rise: round1(rise), before, after });
