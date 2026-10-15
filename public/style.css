@@ -33,6 +33,7 @@
   --off: #9ca3af;
   --raw: #93c5fd;
   --level: #2563eb;
+  --level-line: #ff5a00; /* the chart's actual fuel level: vivid orange, unlike every other mark */
   --speed: #9ca3af;
   --on-accent: #171a1f;
   --shadow-sm: none;
@@ -79,6 +80,7 @@
     --off: #6b7280;
     --raw: #3b5b8c;
     --level: #60a5fa;
+    --level-line: #ff8a1f;
     --speed: #6b7280;
     --on-accent: #171a1f;
     --shadow-sm: none;
@@ -119,6 +121,7 @@
   --off: #6b7280;
   --raw: #3b5b8c;
   --level: #60a5fa;
+  --level-line: #ff8a1f;
   --speed: #6b7280;
   --on-accent: #171a1f;
   --shadow-sm: none;
@@ -176,7 +179,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .icon-btn.on { color: var(--accent-ink); }
 .link { background: none; border: 0; padding: 0; color: var(--accent-ink); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; font-weight: 550; }
 .link.subtle { color: var(--ink-3); font-weight: 400; }
-select, input[type="text"], input[type="search"], input[type="number"], input[type="password"], input[type="time"] {
+select, input[type="text"], input[type="search"], input[type="number"], input[type="password"], input[type="time"], input[type="date"] {
   height: 34px; padding: 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-2);
   background: var(--surface); color: var(--ink); min-width: 0;
 }
@@ -540,6 +543,7 @@ button.tile:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
 .al-amt.t-fuel_drain b { color: var(--crit-ink); }
 .al-amt.t-refuel b { color: var(--good-ink); }
 .al-act { display: flex; justify-content: flex-end; }
+.al-act:has(.al-ev) { flex-direction: column; align-items: flex-end; gap: 6px; }
 /* review on refuel / fuel drain alerts (saved in the Excel fuel ledger) */
 .al-review { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 7px; cursor: default; }
 .verdict-seg { flex-wrap: nowrap; }
@@ -636,8 +640,8 @@ button.tile:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 10px 0 4px; font-size: 12px; color: var(--ink-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { display: inline-block; flex: none; }
-.lg-level { width: 18px; height: 3px; border-radius: 2px; background: var(--level); position: relative; }
-.lg-level::after { content: ""; position: absolute; left: 6px; top: -2.5px; width: 7px; height: 7px; border-radius: 50%; background: var(--level); }
+.lg-level { width: 22px; height: 4px; border-radius: 2px; background: var(--level-line); position: relative; }
+.lg-level::after { content: ""; position: absolute; left: 7px; top: -2.5px; width: 9px; height: 9px; border-radius: 50%; background: var(--level-line); }
 .lg-raw { width: 18px; height: 1.5px; background: var(--raw); }
 .lg-drain { width: 12px; height: 12px; background: color-mix(in srgb, var(--crit) 22%, transparent); border-top: 3px solid var(--crit); }
 .lg-refuel { width: 12px; height: 12px; background: color-mix(in srgb, var(--good) 22%, transparent); border-top: 3px solid var(--good); }
@@ -673,9 +677,10 @@ button.tile:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
 .c-slab { font-size: 10.5px; }
 .c-empty { fill: var(--ink-3); font-size: 13px; }
 .c-raw { fill: none; stroke: var(--raw); stroke-width: 1; stroke-linejoin: round; opacity: .6; }
-.c-level { fill: none; stroke: var(--level); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
-.c-level-dot { fill: var(--level); stroke: var(--surface); stroke-width: 1.5; }
-.c-level.fault { stroke: var(--ink-3); stroke-dasharray: 6 5; stroke-width: 2; }
+.c-level-halo { fill: none; stroke: var(--surface); stroke-width: 8; stroke-linejoin: round; stroke-linecap: round; opacity: .9; }
+.c-level { fill: none; stroke: var(--level-line); stroke-width: 3.5; stroke-linejoin: round; stroke-linecap: round; }
+.c-level-dot { fill: var(--level-line); stroke: var(--surface); stroke-width: 2; }
+.c-level.fault { stroke: var(--ink-3); stroke-dasharray: 6 5; stroke-width: 2.5; }
 .c-level-dot.fault { fill: var(--ink-3); }
 .c-fault { fill: var(--warn-ink); font-size: 12px; font-weight: 600; }
 .c-hatch { stroke: var(--warn); stroke-width: 1.6; opacity: .5; }
@@ -704,7 +709,7 @@ button.tile:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
 .c-overlay { fill: transparent; cursor: crosshair; }
 .c-cross { stroke: var(--ink-2); stroke-width: 1; pointer-events: none; }
 .c-cross-raw { fill: var(--raw); stroke: var(--surface); stroke-width: 1.5; pointer-events: none; }
-.c-cross-lv { fill: var(--level); stroke: var(--surface); stroke-width: 2; pointer-events: none; }
+.c-cross-lv { fill: var(--level-line); stroke: var(--surface); stroke-width: 2; pointer-events: none; }
 .c-brush { fill: var(--accent); opacity: .14; pointer-events: none; }
 .chart-tip {
   position: absolute; z-index: 4; pointer-events: none; min-width: 190px; max-width: 290px;
@@ -721,7 +726,7 @@ button.tile:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
 .tt-row span { color: var(--ink-3); }
 .tt-row small { flex-basis: 100%; color: var(--ink-3); font-size: 11.5px; padding-left: 0; }
 .tt-key { width: 12px; height: 3px; border-radius: 2px; display: inline-block; align-self: center; }
-.tt-lv .tt-key { background: var(--level); }
+.tt-lv .tt-key { background: var(--level-line); height: 4px; }
 .tt-raw .tt-key { background: var(--raw); height: 1.5px; }
 .tt-lv small, .tt-raw small { padding-left: 18px; }
 
@@ -766,7 +771,7 @@ button.tile:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
   .tabs {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 900; height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
     padding: 0 0 env(safe-area-inset-bottom); background: var(--surface); border-top: 1px solid var(--line);
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 0;
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 0;
   }
   .tabs a { flex-direction: column; justify-content: center; gap: 2px; padding: 0; height: auto; border-radius: 0; font-size: 11.5px; }
   .tabs a .ic { width: 21px; height: 21px; }
@@ -845,7 +850,7 @@ button.tile:hover { border-color: var(--line-2); box-shadow: var(--shadow); }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 @media (forced-colors: active) {
-  .gbar i, .c-level, .c-level-dot { forced-color-adjust: none; }
+  .gbar i, .c-level, .c-level-dot, .lg-level { forced-color-adjust: none; }
 }
 
 /* temporary alert view (opened from a counter badge or a vehicle) */
@@ -869,3 +874,51 @@ body:not(.mode-cloud):not(.has-login) .cloud-only { display: none !important; }
 .login-card h1 { margin: 0; font-size: 20px; }
 .login-card input { height: 38px; }
 .login-err { margin: -6px 0 0; min-height: 1.2em; color: var(--crit-ink); font-size: 13px; }
+
+/* evidence: theft alerts picked by truck, dates and tick boxes (printed by evidence.html) */
+#view-evidence .lead { margin: 0; }
+.date-range { display: inline-flex; align-items: center; gap: 6px; }
+.date-range input { width: 150px; }
+.e-min { width: 76px; }
+.e-trucks { display: flex; flex-wrap: wrap; gap: 8px; }
+.e-trucks:empty { display: none; }
+.e-truck {
+  display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line-2); background: var(--surface); cursor: pointer; text-align: left; opacity: .6;
+}
+.e-truck span { font-size: 12px; color: var(--ink-3); }
+.e-truck.some { opacity: .85; }
+.e-truck.all { opacity: 1; border-color: color-mix(in srgb, var(--crit) 45%, var(--line-2)); box-shadow: inset 3px 0 0 var(--crit); }
+.e-truck:hover { background: var(--surface-3); opacity: 1; }
+.e-list.is-loading { opacity: .55; }
+.e-tbl th { position: static; padding: 9px 12px; }
+.e-tbl td { padding: 8px 12px; }
+.e-tbl .e-chk { width: 40px; padding-right: 0; }
+.e-chk-lab { display: inline-grid; place-items: center; width: 28px; height: 28px; margin: -6px 0; cursor: pointer; }
+.e-tbl tbody tr[data-id] { cursor: pointer; }
+.e-tbl tbody tr[data-id]:hover td { background: var(--surface-2); }
+.e-tbl tr.is-off td { color: var(--ink-3); }
+.e-tbl tr.is-off .rc-bad { color: var(--ink-3); }
+.e-tbl tr.e-group-row td { background: var(--surface-2); border-bottom-color: var(--line-2); }
+.e-tbl .e-note { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
+.e-tbl .nowrap, .nowrap { white-space: nowrap; }
+.e-help { padding: 8px 12px 12px; }
+.e-bar {
+  position: sticky; bottom: 12px; z-index: 5; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+  padding: 10px 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line-2); box-shadow: var(--shadow-lg);
+}
+.e-bar .spacer { flex: 1; }
+.e-count { font-size: 14px; }
+#e-xlsx[aria-disabled] { opacity: .5; pointer-events: none; }
+@media (max-width: 960px) {
+  .e-bar { bottom: calc(var(--tabbar-h) + 10px); }
+}
+@media (max-width: 720px) {
+  .date-range input { width: 132px; }
+  .e-list { overflow-x: auto; }
+  .e-tbl { min-width: 640px; }
+  .e-tbl td, .e-tbl th { padding-left: 8px; padding-right: 8px; }
+  /* evidence packs are printed at a desk: phones keep the five tabs they had (the page still
+     opens from a link, and each theft alert has its own "Нотлох баримт" button) */
+  .tabs a[data-view="evidence"] { display: none; }
+}

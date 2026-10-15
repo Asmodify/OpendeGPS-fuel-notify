@@ -1,5 +1,5 @@
 // Fuel chart: hand-written SVG. Two panels sharing one time axis (no dual y-axes):
-//   1. Fuel: raw readings (faint line), trusted settled levels (bold line + dots), alert markers,
+//   1. Fuel: raw readings (faint line), trusted settled levels (bright bold line + dots), alert markers,
 //      shaded periods where the sensor gave no valid reading while powered.
 //   2. Activity band: speed area, engine (ignition) strip, tracker power strip.
 // Crosshair tooltip on hover/tap, drag (mouse) to zoom, double-click to reset.
@@ -171,9 +171,9 @@ export class FuelChart {
     if (!this.d) { this.wrap.innerHTML = ''; return; }
     const d = this.d;
     const narrow = W < 520;
-    const mL = narrow ? 40 : 48, mR = narrow ? 8 : 14;
+    const mL = narrow ? 60 : 66, mR = narrow ? 8 : 14; // room for the "Хөдөлгүүр" strip label
     const topRow = 20; // alert markers
-    const fuelH = narrow ? 170 : 230;
+    const fuelH = this.opts.fuelHeight || (narrow ? 170 : 230); // opts.fuelHeight: printed pages
     const fy0 = topRow, fy1 = topRow + fuelH;
     const gap = 16;
     const spH = 34, stripH = 7, stripGap = 4;
@@ -290,10 +290,12 @@ export class FuelChart {
       const [t, mv] = L[i];
       const x = r1(sx(t)), y = r1(fy(u.of(mv)));
       lvPath += `${i === l0 ? 'M' : 'L'}${x} ${y}`;
-      if (t >= v0 && t <= v1) dots.push(`<circle class="c-level-dot${d.sensorOk === false ? ' fault' : ''}" cx="${x}" cy="${y}" r="${nVis > 120 ? 2 : 3.2}"/>`);
+      if (t >= v0 && t <= v1) dots.push(`<circle class="c-level-dot${d.sensorOk === false ? ' fault' : ''}" cx="${x}" cy="${y}" r="${nVis > 120 ? 2.6 : 4}"/>`);
     }
     const fault = d.sensorOk === false; // stuck/faulty sensor: its "levels" are not reliable
-    if (lvPath) parts.push(`<path class="c-level${fault ? ' fault' : ''}" d="${lvPath}"/>`);
+    // the actual fuel level: a bright, thick line on a light outline, so it stands clear of the
+    // raw readings, the grid and the shaded periods behind it
+    if (lvPath) parts.push(`<path class="c-level-halo" d="${lvPath}"/><path class="c-level${fault ? ' fault' : ''}" d="${lvPath}"/>`);
     if (fault && !noFuel) parts.push(`<text class="c-fault" x="${mL + 8}" y="${fy0 + 16}">Мэдрэгчийн гэмтэл — заалт найдваргүй</text>`);
     parts.push(dots.join(''));
     parts.push('</g>');
@@ -333,7 +335,7 @@ export class FuelChart {
     // Interaction overlay (below markers)
     parts.push(`<line class="c-cross" x1="0" x2="0" y1="${fy0}" y2="${py1}" visibility="hidden"/>`);
     parts.push(`<circle class="c-cross-raw" r="3.5" cx="0" cy="0" visibility="hidden"/>`);
-    parts.push(`<circle class="c-cross-lv" r="5" cx="0" cy="0" visibility="hidden"/>`);
+    parts.push(`<circle class="c-cross-lv" r="6" cx="0" cy="0" visibility="hidden"/>`);
     parts.push(`<rect class="c-brush" x="0" y="${fy0}" width="0" height="${py1 - fy0}" visibility="hidden"/>`);
     parts.push(`<rect class="c-overlay" x="${mL}" y="${fy0}" width="${plotW}" height="${py1 - fy0}"/>`);
 

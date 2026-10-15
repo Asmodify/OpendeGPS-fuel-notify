@@ -254,6 +254,12 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger }) {
         if (!row) throw new HttpError(404, 'Анхааруулга олдсонгүй');
         return send(res, 200, engine.alertView(row));
       }
+      // one printed page of the evidence pack (public/evidence.html)
+      if (m === 'GET' && seg[2] === 'evidence' && seg.length === 3) {
+        const ev = engine.evidence(id);
+        if (!ev) throw new HttpError(404, 'Анхааруулга олдсонгүй');
+        return send(res, 200, ev);
+      }
       if (m === 'POST' && (seg[2] === 'ack' || seg[2] === 'unack') && seg.length === 3) {
         await readJson(req).catch(() => ({}));
         const view = engine.ackAlert(id, seg[2] === 'ack');

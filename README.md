@@ -30,6 +30,12 @@ events trigger notifications.
 - **Map** – where every vehicle is now.
 - **Alerts** – everything that was detected, newest first. Acknowledge alerts once you have
   looked at them.
+- **Evidence** (Нотлох баримт) – fuel drains and receipts the tank does not account for, picked
+  by vehicle, group, dates and tick boxes, then printed together (or saved as one PDF): a
+  summary page, then one A4 page per incident with the fuel chart around it, the route on a
+  map, the levels before and after, what the truck did meanwhile (driving, engine, power cut),
+  the fuel receipts of those days and lines for the driver's explanation and signatures. Each
+  theft alert also has its own "Нотлох баримт" button. The map tiles come from OpenStreetMap.
 - **Report** – distance, engine hours and fuel used per vehicle for a period, and the Excel
   fuel ledger (below).
 - **Settings** – alert thresholds, notifications, tank calibration, muting vehicles.

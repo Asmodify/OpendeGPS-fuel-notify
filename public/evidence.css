@@ -1,0 +1,133 @@
+/* Evidence pack (evidence.html): A4 pages, on screen as sheets and on paper / PDF as pages.
+   Content is 190 mm wide in both, so the charts drawn for the screen print unchanged. */
+@page { size: A4 portrait; margin: 10mm; }
+html, body.ev { background: #e5e7eb; }
+body.ev { font-size: 12px; line-height: 1.4; min-height: 0; overflow-x: auto; }
+.ev * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.ev a { color: #1d4ed8; }
+.ev .bad { color: var(--crit-ink); }
+.ev .muted { color: var(--ink-3); }
+.ev .nowrap { white-space: nowrap; }
+
+.ev-toolbar {
+  position: sticky; top: 0; z-index: 10; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+  padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--line); font-size: 13.5px;
+}
+.ev-toolbar .ev-back { color: var(--ink-2); text-decoration: none; }
+.ev-progress { color: var(--ink-3); }
+.ev-spacer { flex: 1; }
+.ev-tip { color: var(--ink-3); font-size: 12px; max-width: 46ch; }
+.ev-pages { padding: 16px 0 40px; }
+
+.page {
+  position: relative; display: flex; flex-direction: column; gap: 7px; box-sizing: border-box;
+  width: 210mm; min-height: 297mm; margin: 0 auto 16px; padding: 10mm; background: #fff; color: #111827;
+  box-shadow: 0 2px 10px rgba(17, 24, 39, 0.15);
+}
+.page h1 { font-size: 17px; font-weight: 700; }
+.page h3 { font-size: 12.5px; font-weight: 650; margin: 6px 0 2px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); }
+.missing { padding: 14px; border: 1px dashed var(--line-2); border-radius: 8px; color: var(--ink-2); }
+
+/* header + footer of each page */
+.ph { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding-bottom: 6px; border-bottom: 2px solid #111827; }
+.ph-brand { display: flex; align-items: center; gap: 8px; }
+.ph-brand img { width: 20px; height: 26px; object-fit: contain; }
+.ph-brand b { display: block; font-size: 12.5px; }
+.ph-brand small { display: block; color: var(--ink-3); font-size: 10.5px; }
+.ph-title { display: flex; align-items: baseline; gap: 12px; }
+.ph-title span { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.pf { margin-top: auto; display: flex; justify-content: space-between; gap: 12px; padding-top: 5px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 9.5px; }
+
+/* summary page */
+.sum-meta { display: grid; grid-template-columns: 2fr 1fr 1.3fr; gap: 6px 14px; }
+.sum-meta span, .sum-tile span, .fact span, .inc-lost span { display: block; color: var(--ink-3); font-size: 10.5px; }
+.sum-meta b { font-weight: 600; }
+.sum-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.sum-tile { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.sum-tile b { font-size: 22px; font-weight: 700; }
+.sum-tile.bad { background: var(--crit-bg); border-color: color-mix(in srgb, var(--crit) 35%, var(--line)); }
+.sum-tile.bad b { color: var(--crit-ink); }
+.how { margin-top: 4px; padding: 8px 12px; border-radius: 8px; background: #f9fafb; color: var(--ink-2); font-size: 11px; }
+.how p + p { margin-top: 4px; }
+.how i { display: inline-block; vertical-align: middle; margin: 0 4px 0 2px; }
+
+/* tables */
+.ev-tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+.ev-tbl th { text-align: left; font-weight: 600; color: var(--ink-3); font-size: 10px; border-bottom: 1.5px solid #9ca3af; padding: 4px 6px; }
+.ev-tbl td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.ev-tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ev-tbl tfoot td { border-top: 1.5px solid #9ca3af; border-bottom: 0; }
+.ev-tbl tr { break-inside: avoid; }
+.ev-tbl.small { font-size: 10.5px; }
+.ev-tbl tr.main td { background: var(--crit-bg); font-weight: 600; }
+
+/* incident page */
+.inc-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 4px 0 2px; }
+.inc-truck b { display: block; font-size: 24px; font-weight: 750; letter-spacing: .01em; line-height: 1.1; }
+.inc-truck span { color: var(--ink-3); font-size: 11px; }
+.inc-what .kind { display: block; color: var(--crit-ink); font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+.inc-what b { font-size: 14px; font-weight: 650; }
+.inc-what .verdict { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 9px; font-size: 10.5px; font-weight: 650; background: var(--surface-3); vertical-align: 2px; }
+.inc-what .verdict.v-confirmed { background: var(--crit); color: #fff; }
+.inc-what .verdict.v-false_alarm { background: var(--good-bg); color: var(--good-ink); }
+.inc-lost { text-align: right; padding: 6px 12px; border-radius: 8px; background: var(--crit-bg); border: 1px solid color-mix(in srgb, var(--crit) 35%, var(--line)); }
+.inc-lost b { display: block; font-size: 22px; font-weight: 750; color: var(--crit-ink); white-space: nowrap; }
+.facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 12px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.fact b { font-weight: 600; font-size: 11.5px; }
+.fact.bad b { color: var(--crit-ink); }
+.fact.warn b { color: var(--warn-ink); }
+.fact.wide { grid-column: span 2; }
+.fig { break-inside: avoid; }
+.fig-cap { font-size: 10.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 2px; }
+.fig-cap i { display: inline-block; vertical-align: middle; margin: 0 4px 0 6px; }
+.fig .legend { margin: 2px 0 0; font-size: 10px; gap: 2px 12px; }
+.ev-chart { width: 100%; }
+.ev .fchart-svg svg { width: 100%; height: auto; } /* a print width other than the screen's scales it */
+.ev .c-span.drain { opacity: .18; }
+.ev .chart-tip { display: none; }
+.detail { font-size: 11px; color: var(--ink-2); }
+.detail span { font-weight: 600; color: var(--ink); }
+
+/* legend keys used in text */
+.k-level { width: 20px; height: 4px; border-radius: 2px; background: var(--level-line); }
+.k-raw { width: 18px; height: 1.5px; background: var(--raw); }
+.k-drain { width: 12px; height: 10px; background: color-mix(in srgb, var(--crit) 22%, transparent); border-top: 2px solid var(--crit); }
+.k-track { width: 18px; height: 3px; border-radius: 2px; background: #1d4ed8; }
+.k-ev { width: 18px; height: 4px; border-radius: 2px; background: #dc2626; }
+.k-pin { width: 9px; height: 9px; border-radius: 50%; background: #dc2626; border: 1.5px solid #fff; box-shadow: 0 0 0 1px #dc2626; }
+
+/* map: tiles + track (evidence.js drawMap) */
+.ev-map { position: relative; overflow: hidden; border: 1px solid var(--line-2); border-radius: 6px; background: #f2efe9; }
+.ev-map .tiles img { position: absolute; width: 256px; height: 256px; max-width: none; user-select: none; }
+.ev-map svg { position: absolute; left: 0; top: 0; }
+.m-track { fill: none; stroke: #1d4ed8; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; opacity: .75; }
+.m-ev-halo { fill: none; stroke: #fff; stroke-width: 8; stroke-linejoin: round; stroke-linecap: round; opacity: .9; }
+.m-ev { fill: none; stroke: #dc2626; stroke-width: 4.5; stroke-linejoin: round; stroke-linecap: round; }
+.m-pin path { fill: #dc2626; stroke: #fff; stroke-width: 1.8; }
+.m-pin circle { fill: #fff; }
+.ev-map .attr, .ev-map .scale { position: absolute; bottom: 2px; padding: 0 4px; background: rgba(255, 255, 255, .8); font-size: 9px; color: #374151; border-radius: 3px; }
+.ev-map .attr { right: 2px; }
+.ev-map .scale { left: 2px; display: inline-flex; align-items: center; gap: 5px; }
+.ev-map .scale i { display: block; height: 5px; border: 1.5px solid #374151; border-top: 0; }
+
+/* lines to sign */
+.sign { margin-top: 4px; display: flex; flex-direction: column; gap: 9px; font-size: 11px; break-inside: avoid; }
+.sign-row { display: flex; align-items: flex-end; gap: 8px; }
+.sign-row span { white-space: nowrap; font-weight: 600; min-width: 0; }
+.sign i, .sign-grid i { flex: 1; display: block; border-bottom: 1px solid #6b7280; height: 16px; }
+.sign-grid { display: grid; grid-template-columns: 1fr 1fr 0.5fr; gap: 12px; }
+.sign-grid div { display: flex; flex-direction: column; gap: 2px; }
+.sign-grid span { font-weight: 600; }
+.sign-grid i { flex: none; height: 22px; }
+.sign-grid small { color: var(--ink-3); font-size: 9.5px; text-align: right; }
+
+@media print {
+  html, body.ev { background: #fff; }
+  .ev-toolbar { display: none; }
+  .ev-pages { padding: 0; }
+  .page { width: auto; min-height: 276mm; margin: 0; padding: 0; box-shadow: none; break-after: page; }
+  .page:last-child { break-after: auto; }
+}
+@media screen and (max-width: 820px) {
+  .ev-tip { display: none; }
+}

@@ -112,6 +112,7 @@ const S = {
     temp: null, // { label }: a shortcut (counter badge, "All alerts for this vehicle") is showing its own filter
   },
   report: { hours: 24, rows: null, loading: false, error: null, sort: 'used', dir: -1, loadedAt: 0 },
+  evidence: { f: null, list: [], off: new Set(), loading: false, loaded: false, loadedAt: 0, error: null, limited: false }, // f: evDefaults() once the clock skew is known
   receipts: { data: null, loading: false, error: null, loadedAt: 0, filter: loadPref('receiptsFilter', 'problems') },
   seen: new Set(),
   prefs: { sound: loadPref('sound', true), bsev: loadPref('bsev', ['critical', 'warning']), theme: loadPref('theme', 'auto') },
@@ -768,7 +769,7 @@ function onAlert(rawA) {
 }
 
 // ---------------------------------------------------------------- routing
-const VIEWS = ['fleet', 'map', 'alerts', 'report', 'settings'];
+const VIEWS = ['fleet', 'map', 'alerts', 'evidence', 'report', 'settings'];
 function parseHash() {
   // Canonical: #/<view>?v=<imei>&at=<ms>. Also accepts #/vehicle/<imei> as a deep-link alias.
   const h = location.hash.replace(/^#\/?/, '');
@@ -812,6 +813,11 @@ function showView(view) {
   if (view === 'fleet') renderFleet();
   if (view === 'map') { renderMap(); setTimeout(() => mapObj?.invalidateSize(), 50); }
   if (view === 'alerts') { syncAlertControls(); if (!S.alerts.loaded || Date.now() - (S.alerts.loadedAt || 0) > 60e3) loadAlerts(); else renderAlerts(); }
+  if (view === 'evidence') {
+    S.evidence.f ||= evDefaults();
+    syncEvControls();
+    if (!S.evidence.loaded || Date.now() - S.evidence.loadedAt > 60e3) loadEvidence(); else renderEvidence();
+  }
   if (view === 'report') {
     if (!S.report.rows || Date.now() - S.report.loadedAt > 5 * 60e3) loadReport(); else renderReport();
     if (!S.receipts.data || Date.now() - S.receipts.loadedAt > 60e3) loadReceipts(); else renderReceipts();
@@ -842,6 +848,7 @@ function populateSelects() {
   const vs = [...S.vehicles].sort((a, b) => a.shortName.localeCompare(b.shortName, undefined, { numeric: true }));
   setHTML(vehSel, html`<option value="">Бүх машин</option>${vs.map((v) => html`<option value="${v.imei}">${vehicleOptionLabel(v, dupes)}</option>`)}`);
   syncAlertControls();
+  if (S.evidence.f) syncEvControls();
 }
 
 // ---------------------------------------------------------------- FLEET view
@@ -1159,7 +1166,8 @@ function alertItem(a, { compact = false } = {}) {
     ${amt ? html`<div class="al-amt t-${a.type}"><b>${sign}${amt.main}</b><small>${amt.sub}</small></div>` : html`<div class="al-amt"></div>`}
     <div class="al-act">${a.acked
       ? html`<span class="acked-mark" title="Танилцсан">${icon('check')}<span>Танилцсан</span></span>`
-      : html`<button type="button" class="btn small js-ack" data-id="${a.id}" title="Танилцсан гэж тэмдэглэх">${icon('check')}<span class="hide-sm">Танилцлаа</span></button>`}</div>
+      : html`<button type="button" class="btn small js-ack" data-id="${a.id}" title="Танилцсан гэж тэмдэглэх">${icon('check')}<span class="hide-sm">Танилцлаа</span></button>`}
+      ${S.mode !== 'cloud' && isTheft(a) ? html`<a class="btn small al-ev" href="${evidenceUrl([a.id])}" target="_blank" rel="noopener" title="Энэ тохиолдлын нотлох баримтын хуудсыг хэвлэхээр нээх">${icon('evidence')}<span class="hide-sm">Нотлох баримт</span></a>` : ''}</div>
   </article>`;
 }
 /** Verdict buttons (fuel drains) and a note field on refuel / fuel drain alerts; both are saved
@@ -1299,6 +1307,191 @@ async function ackAll() {
   loadAlerts();
   loadVehicles();
   if (S.detail) loadDetail(true);
+}
+
+// ---------------------------------------------------------------- EVIDENCE view
+// Theft alerts (fuel drains, receipts the tank does not account for) picked by truck, group,
+// dates and tick boxes, then printed as one evidence pack: evidence.html opens in a new tab
+// with a summary page and one A4 page per alert. Everything shown is ticked; S.evidence.off
+// holds the ones unticked.
+const EV_TYPES = ['fuel_drain', 'receipt_mismatch'];
+const EV_PRINT_MAX = 300; // pages one pack may hold (each loads its own chart and map)
+const EV_XLSX_MAX = 2000; // = ALERT_IDS_MAX on the server
+const isTheft = (a) => a.type === 'receipt_mismatch' || (a.type === 'fuel_drain' && !a.pending && a.severity !== 'info');
+const lostLitres = (a) => (a.type === 'receipt_mismatch' ? (isNum(a.receipt?.missing) ? Number(a.receipt.missing) : null) : isNum(a.amountL) ? Number(a.amountL) : null);
+const p2d = (n) => String(n).padStart(2, '0');
+const isoDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${p2d(d.getMonth() + 1)}-${p2d(d.getDate())}`; };
+const dayStartMs = (day) => new Date(`${day}T00:00:00`).getTime();
+const evidenceUrl = (ids) => `evidence.html#ids=${ids.join(',')}`;
+function evDefaults() {
+  const saved = pick(loadPref('evidenceFilters', {}), ['imei', 'group', 'types', 'verdict', 'minL', 'days']);
+  const days = [7, 30, 90].includes(saved.days) ? saved.days : 30;
+  const to = isoDay(now());
+  return { imei: '', group: '', types: [...EV_TYPES], verdict: 'nofalse', minL: 0, ...saved, days, from: isoDay(now() - (days - 1) * 24 * HOUR), to };
+}
+function saveEvFilters() {
+  const { imei, group, types, verdict, minL, days } = S.evidence.f;
+  savePref('evidenceFilters', { imei, group, types, verdict, minL, days });
+}
+function syncEvControls() {
+  const f = S.evidence.f;
+  const vehSel = $('#e-veh');
+  setHTML(vehSel, html`<option value="">Бүх машин</option>${[...$('#a-veh').options].slice(1).map((o) => html`<option value="${o.value}">${o.textContent}</option>`)}`);
+  vehSel.value = f.imei;
+  if (vehSel.value !== f.imei) f.imei = '';
+  const gSel = $('#e-group');
+  setHTML(gSel, html`${[...$('#f-group').options].map((o) => html`<option value="${o.value}">${o.value ? o.textContent : 'Бүх бүлэг'}</option>`)}`);
+  gSel.value = f.group;
+  if (gSel.value !== f.group) f.group = '';
+  $('#e-from').value = f.from;
+  $('#e-to').value = f.to;
+  $('#e-from').max = f.to;
+  $('#e-to').min = f.from;
+  $$('#e-days button').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.days) === f.days)));
+  $$('#e-types button').forEach((b) => b.setAttribute('aria-pressed', String(f.types.includes(b.dataset.type))));
+  $('#e-verdict').value = f.verdict;
+  $('#e-min').value = String(f.minL || 0);
+}
+let evReq = 0;
+async function loadEvidence() {
+  const st = S.evidence;
+  const f = st.f;
+  st.off.clear();
+  if (!f.types.length || !f.from || !f.to) { st.list = []; st.loaded = true; renderEvidence(); return; }
+  const p = new URLSearchParams({ type: f.types.join(','), limit: '5000' });
+  if (f.imei) p.set('imei', f.imei);
+  p.set('since', String(dayStartMs(f.from)));
+  p.set('until', String(dayStartMs(f.to) + 24 * HOUR - 1));
+  const req = ++evReq;
+  st.loading = true;
+  $('#e-list').classList.add('is-loading');
+  if (!st.list.length) renderEvidence();
+  try {
+    const data = await api('/api/alerts?' + p.toString());
+    if (req !== evReq) return;
+    st.list = (Array.isArray(data) ? data : []).map(normAlert).filter(isTheft);
+    st.limited = Array.isArray(data) && data.length >= 5000;
+    st.error = null;
+    st.loaded = true;
+    st.loadedAt = Date.now();
+  } catch (e) {
+    if (req !== evReq) return;
+    st.error = e.message;
+  } finally {
+    if (req === evReq) {
+      st.loading = false;
+      $('#e-list').classList.remove('is-loading');
+      renderEvidence();
+    }
+  }
+}
+/** The loaded alerts the group / verdict / litres filters let through, by truck, oldest first. */
+function evShown() {
+  const f = S.evidence.f;
+  const min = Number(f.minL) || 0;
+  return S.evidence.list.filter((a) => {
+    if (f.group && groupKey(a.group ?? S.byImei.get(a.imei)?.group) !== f.group) return false;
+    if (f.verdict === 'nofalse' && a.verdict === 'false_alarm') return false;
+    if (f.verdict === 'confirmed' && a.verdict !== 'confirmed') return false;
+    if (min > 0 && !((lostLitres(a) ?? 0) >= min)) return false;
+    return true;
+  }).sort((a, b) => aName(a).localeCompare(aName(b), undefined, { numeric: true }) || (a.t ?? 0) - (b.t ?? 0));
+}
+const evPicked = () => evShown().filter((a) => !S.evidence.off.has(a.id));
+function litresText(L) { return isNum(L) ? `${fmtNum(L, 0)} л` : '—'; }
+function renderEvidence() {
+  const st = S.evidence;
+  const el = $('#e-list');
+  const shown = evShown();
+  const trucks = new Map();
+  for (const a of shown) {
+    const k = a.imei;
+    if (!trucks.has(k)) trucks.set(k, { imei: k, name: aName(a), items: [], litres: 0, on: 0, onLitres: 0 });
+    const g = trucks.get(k);
+    g.items.push(a);
+    g.litres += lostLitres(a) ?? 0;
+    if (!st.off.has(a.id)) { g.on++; g.onLitres += lostLitres(a) ?? 0; }
+  }
+  // per-truck chips: how much each lost; a click ticks only that truck
+  setHTML($('#e-trucks'), trucks.size > 1 ? html`${[...trucks.values()].sort((a, b) => b.litres - a.litres).map((g) => html`<button type="button" class="e-truck${g.on === g.items.length ? ' all' : g.on ? ' some' : ''}" data-only="${g.imei}" title="Зөвхөн энэ машиныг сонгох">
+      <b>${g.name}</b><span>${g.items.length} удаа · ${litresText(g.litres)}</span></button>`)}` : '');
+  if (!st.f.types.length) setHTML(el, emptyState('info', 'Дор хаяж нэг төрөл сонгоно уу', 'Дээрх “Түлш алдагдал” / “Баримт зөрсөн” товчийг ашиглана уу.'));
+  else if (!shown.length) {
+    if (st.loading || !st.loaded) setHTML(el, html`<div class="empty"><span class="spinner"></span><b>Ачаалж байна…</b></div>`);
+    else if (st.error) setHTML(el, emptyState('wifi-off', 'Ачаалж чадсангүй', st.error, { id: 'retry-evidence', label: 'Дахин оролдох' }));
+    else setHTML(el, emptyState('check', 'Хулгайн анхааруулга алга', 'Энэ хугацаанд шүүлтүүрт тохирох түлш алдагдал, баримтын зөрүү гараагүй.'));
+  } else {
+    const allOn = shown.every((a) => !st.off.has(a.id));
+    const someOn = shown.some((a) => !st.off.has(a.id));
+    setHTML(el, html`<table class="tbl e-tbl">
+      <thead><tr>
+        <th class="e-chk"><label class="e-chk-lab"><input type="checkbox" class="js-ev-all"${raw(allOn ? ' checked' : '')}${raw(!allOn && someOn ? ' data-mixed="1"' : '')} aria-label="Бүгдийг сонгох"></label></th>
+        <th>Машин</th><th>Огноо, цаг</th><th>Юу болсон</th><th class="num">Алдсан</th><th>Дүгнэлт</th><th class="hide-sm">Тэмдэглэл</th><th></th>
+      </tr></thead>
+      <tbody>${[...trucks.values()].map((g) => html`${trucks.size > 1 ? html`<tr class="e-group-row"><td class="e-chk"><label class="e-chk-lab"><input type="checkbox" class="js-ev-truck" data-imei="${g.imei}"${raw(g.on === g.items.length ? ' checked' : '')}${raw(g.on && g.on < g.items.length ? ' data-mixed="1"' : '')} aria-label="${g.name}: бүгдийг сонгох"></label></td>
+          <td colspan="3"><b>${g.name}</b> <span class="muted">${g.on < g.items.length ? `${g.items.length}-аас ${g.on} сонгосон` : `${g.items.length} тохиолдол`}</span></td><td class="num"><b>${litresText(g.onLitres)}</b></td><td colspan="3"></td></tr>` : ''}
+        ${g.items.map((a) => {
+    const on = !st.off.has(a.id);
+    const L = lostLitres(a);
+    return html`<tr class="sev-${a.severity}${on ? '' : ' is-off'}" data-id="${a.id}">
+            <td class="e-chk"><label class="e-chk-lab"><input type="checkbox" class="js-ev" data-id="${a.id}"${raw(on ? ' checked' : '')} aria-label="Сонгох"></label></td>
+            <td class="nowrap"><b>${aName(a)}</b></td>
+            <td class="nowrap" title="${fmtFull(a.t)}">${fmtTime(a.t, now())}${isNum(a.fromT) && a.fromT < a.t - 60e3 ? html`<small class="muted"> · ${fmtDur(a.t - a.fromT)}</small>` : ''}</td>
+            <td>${a.title || typeLabel(a.type)}</td>
+            <td class="num nowrap rc-bad"><b>${litresText(L)}</b></td>
+            <td>${a.type === 'fuel_drain' && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span>` : html`<span class="muted">${a.type === 'fuel_drain' ? 'Шалгаагүй' : '—'}</span>`}</td>
+            <td class="hide-sm e-note">${a.note}</td>
+            <td class="nowrap"><a class="btn small" href="${evidenceUrl([a.id])}" target="_blank" rel="noopener" title="Зөвхөн энэ тохиолдлын хуудсыг нээх">${icon('evidence')}<span class="hide-sm">Хуудас</span></a></td>
+          </tr>`;
+  })}`)}</tbody></table>
+      ${st.limited ? html`<p class="help e-help">Хамгийн сүүлийн 5000 анхааруулгыг л ачааллаа — хугацааг богиносгоно уу.</p>` : ''}`);
+    for (const c of $$('input[data-mixed]', el)) c.indeterminate = true;
+  }
+  renderEvBar();
+}
+function renderEvBar() {
+  const picked = evPicked();
+  const bar = $('#e-bar');
+  bar.hidden = !S.evidence.list.length;
+  const L = picked.reduce((s, a) => s + (lostLitres(a) ?? 0), 0);
+  const trucks = new Set(picked.map((a) => a.imei)).size;
+  setHTML($('#e-count'), picked.length
+    ? html`<b>${picked.length}</b> тохиолдол сонгосон · ${trucks} машин · нийт <b class="rc-bad">${litresText(L)}</b>`
+    : html`<span class="muted">Нэг ч тохиолдол сонгоогүй байна</span>`);
+  $('#e-print').disabled = !picked.length;
+  $('#e-xlsx').toggleAttribute('aria-disabled', !picked.length);
+}
+function evToggle(ids, on) {
+  for (const id of ids) {
+    if (on) S.evidence.off.delete(id);
+    else S.evidence.off.add(id);
+  }
+  renderEvidence();
+}
+function openEvidencePack() {
+  const ids = evPicked().map((a) => a.id);
+  if (!ids.length) return;
+  if (ids.length > EV_PRINT_MAX) {
+    toast({ sev: 'warning', title: `Нэг удаад ${EV_PRINT_MAX} хүртэл хуудас`, body: `${ids.length} тохиолдол сонгосон байна. Машин эсвэл хугацаагаар хувааж бэлтгэнэ үү.` });
+    return;
+  }
+  window.open(evidenceUrl(ids), '_blank', 'noopener');
+}
+function downloadEvidenceExcel(link) {
+  const ids = evPicked().map((a) => a.id);
+  if (!ids.length) return;
+  if (ids.length > EV_XLSX_MAX) {
+    toast({ sev: 'warning', title: `Excel-д нэг удаад ${EV_XLSX_MAX} хүртэл`, body: 'Хугацааг богиносгоно уу.' });
+    return;
+  }
+  link.setAttribute('href', `/api/export/alerts.xlsx?ids=${ids.join(',')}`);
+  downloadExcel(link);
+}
+function evFilterChanged(reload) {
+  saveEvFilters();
+  syncEvControls();
+  if (reload) loadEvidence();
+  else renderEvidence();
 }
 
 // ---------------------------------------------------------------- REPORT view
@@ -2190,6 +2383,7 @@ function bindStatic() {
       const a = act.dataset.action;
       if (a === 'retry-vehicles') { S.vehiclesError = null; renderFleet(); loadVehicles(); }
       else if (a === 'retry-alerts') loadAlerts();
+      else if (a === 'retry-evidence') loadEvidence();
       else if (a === 'retry-report') loadReport();
       else if (a === 'retry-settings') renderSettings();
       else if (a === 'retry-detail') loadDetail();
@@ -2293,6 +2487,66 @@ function bindStatic() {
   $('#a-more').addEventListener('click', () => loadAlerts(true));
   $('#a-xlsx').addEventListener('click', (e) => { e.preventDefault(); downloadAlertsExcel(e.currentTarget); });
   $('#a-ackall').addEventListener('click', ackAll);
+
+  // Evidence
+  const evF = () => S.evidence.f;
+  $('#e-veh').addEventListener('change', (e) => { evF().imei = e.target.value; evFilterChanged(true); });
+  $('#e-group').addEventListener('change', (e) => { evF().group = e.target.value; evFilterChanged(false); });
+  const evDates = () => {
+    const f = evF();
+    const a = $('#e-from').value, b = $('#e-to').value;
+    if (!a || !b) return;
+    [f.from, f.to] = a <= b ? [a, b] : [b, a];
+    f.days = null;
+    evFilterChanged(true);
+  };
+  $('#e-from').addEventListener('change', evDates);
+  $('#e-to').addEventListener('change', evDates);
+  $('#e-days').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-days]');
+    if (!b) return;
+    const f = evF();
+    f.days = Number(b.dataset.days);
+    f.to = isoDay(now());
+    f.from = isoDay(now() - (f.days - 1) * 24 * HOUR);
+    evFilterChanged(true);
+  });
+  $('#e-types').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-type]');
+    if (!b) return;
+    const f = evF();
+    const t = b.dataset.type;
+    f.types = f.types.includes(t) ? f.types.filter((x) => x !== t) : EV_TYPES.filter((x) => x === t || f.types.includes(x));
+    evFilterChanged(true);
+  });
+  $('#e-verdict').addEventListener('change', (e) => { evF().verdict = e.target.value; evFilterChanged(false); });
+  $('#e-min').addEventListener('input', debounce((e) => { evF().minL = Math.max(0, Number(e.target.value) || 0); saveEvFilters(); renderEvidence(); }, 250));
+  $('#e-refresh').addEventListener('click', () => loadEvidence());
+  $('#e-trucks').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-only]');
+    if (!b) return;
+    const shown = evShown();
+    const mine = shown.filter((a) => a.imei === b.dataset.only);
+    const onlyMine = shown.every((a) => (a.imei === b.dataset.only) !== S.evidence.off.has(a.id));
+    // a second click on the truck that is already the only one ticked brings back all of them
+    S.evidence.off = new Set(onlyMine ? [] : shown.filter((a) => !mine.includes(a)).map((a) => a.id));
+    renderEvidence();
+  });
+  $('#e-list').addEventListener('change', (e) => {
+    const c = e.target;
+    if (c.matches('.js-ev')) evToggle([Number(c.dataset.id)], c.checked);
+    else if (c.matches('.js-ev-truck')) evToggle(evShown().filter((a) => a.imei === c.dataset.imei).map((a) => a.id), c.checked);
+    else if (c.matches('.js-ev-all')) evToggle(evShown().map((a) => a.id), c.checked);
+  });
+  $('#e-list').addEventListener('click', (e) => {
+    if (e.target.closest('a, button, input, label')) return;
+    const tr = e.target.closest('tr[data-id]');
+    if (!tr) return;
+    const id = Number(tr.dataset.id);
+    evToggle([id], S.evidence.off.has(id));
+  });
+  $('#e-print').addEventListener('click', openEvidencePack);
+  $('#e-xlsx').addEventListener('click', (e) => { e.preventDefault(); downloadEvidenceExcel(e.currentTarget); });
   const alertOpen = (container, inDrawer) => {
     container.addEventListener('click', (e) => {
       if (e.target.closest('button, a, input, label, .al-review')) return;

@@ -5,6 +5,7 @@ import { DEFAULT_THRESHOLDS, DEFAULT_CALIBRATION, CHECK_MIN_MINUTES, CHECK_MAX_M
 import { LEDGER_TYPES } from './db.js';
 import { ledgerEntry, litersAt, fuelPct, amountLitres, fuelEventLitres, isPendingDrain, parseExtra } from './ledger.js';
 import { gpsFault, fuelSensorState, buildFleetStatusSheets } from './fleetstatus.js';
+import { validPos } from './refuelplaces.js';
 import { mnTitle, mnDetail, mnAlertTypes } from './mn.js';
 import {
   RECEIPTS_KEY, RECEIPTS_MAX, MISSING_MIN_L, MISSING_MIN_PCT, parseReceiptText, receiptId, refuelsFromRows, matchReceipts, receiptTotals, localMs,
@@ -1210,6 +1211,7 @@ export class Engine {
     const next = id === 'all' ? [] : stored.filter((r) => r.id !== id);
     if (next.length === stored.length) throw new HttpError(404, 'Баримт олдсонгүй');
     this.db.setSetting(RECEIPTS_KEY, next);
+    this.rcCache = null;
     this.ledger?.touch('receipts');
     return this.receiptsView(now);
   }
@@ -1220,6 +1222,7 @@ export class Engine {
    * receipt: its key is the receipt's id.
    */
   checkReceipts(now = Date.now(), mode = 'live') {
+    this.rcCache = null; // runs after every poll and import: new refuels / receipts change the matches
     if (!this.receiptsStored().length) return;
     const tz = this.cfg.timezone;
     const fmt = (x) => `${Math.round(x)} L`;
@@ -1295,6 +1298,8 @@ export class Engine {
       verdict: VERDICTS.includes(row.verdict) ? row.verdict : 'unchecked',
       note: row.note ?? '',
       reviewedAt: row.reviewed_at ?? null,
+      // a receipt the tank does not account for: the receipt's litres, what went in, what is missing
+      ...(row.type === 'receipt_mismatch' ? { receipt: receiptOf(row.extra) } : {}),
     };
   }
 
@@ -1486,6 +1491,137 @@ export class Engine {
       alerts: this.queryAlerts({ imei, since: from, limit: 2000 }),
       track: thinTrack(rows, 1500),
     };
+  }
+
+  /**
+   * GET /api/alerts/:id/evidence: what one printed evidence page shows for a theft alert (a
+   * fuel drain or a receipt the tank does not account for): the alert, the fuel and activity
+   * series around it, the track, the levels before and after, what the vehicle did while the
+   * fuel went, and the fuel receipts of those days with how much of each reached the tank.
+   * Other alerts work too (the page then simply has no before/after levels).
+   */
+  evidence(id, now = Date.now()) {
+    const row = this.db.getAlert(id);
+    if (!row) return null;
+    const alert = this.alertView(row);
+    const imei = row.imei ?? null;
+    const rec = imei ? this.recs.get(imei) : null;
+    const cal = imei ? this.vehicleCal(imei) : null;
+    const th = imei ? this.settingsFor(imei).th : this.thresholds();
+    const x = parseExtra(row.extra);
+    const t = row.t;
+    const t0 = Number.isFinite(row.from_t) && row.from_t < t ? row.from_t : t;
+    // the chart: the event with a margin either side (more for long events, up to 12 h)
+    const pad = clamp((t - t0) * 0.4, 3 * HOUR, 12 * HOUR);
+    const from = t0 - pad;
+    const to = Math.min(Math.max(now, t), t + pad);
+    const rows = imei ? this.db.samplesRange(imei, from, to) : [];
+    const levels = imei ? this.db.levelsRange(imei, from, to).map((r) => [r.t, round(r.mv)]) : [];
+    const L = (mv) => {
+      const v = Number.isFinite(mv) && cal ? this.litersAt(mv, cal) : null;
+      return Number.isFinite(v) ? round(v, 1) : null;
+    };
+
+    // fuel before / after and how much went
+    let before = null;
+    let after = null;
+    let lostL = null;
+    if (row.type === 'fuel_drain' || row.type === 'refuel') {
+      const fromMv = num(x.fromMv);
+      const toMv = num(x.toMv) ?? (fromMv !== null && num(row.amount_mv) !== null ? fromMv + (row.type === 'refuel' ? 1 : -1) * row.amount_mv : null);
+      before = fromMv === null ? null : { t: t0, mv: round(fromMv), liters: L(fromMv) };
+      after = toMv === null ? null : { t, mv: round(toMv), liters: L(toMv) };
+      lostL = alert.amountL;
+    } else if (row.type === 'receipt_mismatch') {
+      lostL = alert.receipt.missing;
+    }
+
+    // what the vehicle did from the start of the event to its detection
+    const during = rows.filter((s) => s.t >= t0 && s.t <= t);
+    const powerCut = num(th.powerCutMv) ?? 5000;
+    const GAP = 15 * MIN; // longer silences are counted as "no data", not as any state
+    let powerOffMs = 0;
+    let engineOnMs = 0;
+    let movingMs = 0;
+    let noDataMs = 0;
+    let maxSpeed = 0;
+    for (let i = 0; i < during.length; i++) {
+      const s = during[i];
+      maxSpeed = Math.max(maxSpeed, s.spd ?? 0);
+      if (i === 0) continue;
+      const p = during[i - 1];
+      const dt = s.t - p.t;
+      if (dt > GAP) { noDataMs += dt; continue; }
+      if (p.pwr !== null && p.pwr < powerCut) powerOffMs += dt;
+      if (p.ign === 1) engineOnMs += dt;
+      if ((p.spd ?? 0) >= 3) movingMs += dt;
+    }
+    if (during.length && t0 < t) noDataMs += Math.max(0, during[0].t - t0 - GAP) + Math.max(0, t - during[during.length - 1].t - GAP);
+    // where it happened: the middle of the positions while standing still, else the alert's own
+    const still = during.filter((s) => (s.spd ?? 0) < 3 && validPos(s.lat, s.lng));
+    let place = null;
+    if (still.length) {
+      const mid = (k) => still.map((s) => s[k]).sort((a, b) => a - b)[Math.floor(still.length / 2)];
+      place = { lat: mid('lat'), lng: mid('lng'), source: 'stop' };
+    } else if (validPos(row.lat, row.lng)) place = { lat: row.lat, lng: row.lng, source: 'alert' };
+
+    // fuel receipts of the days around it (the receipt itself for a receipt mismatch)
+    const day = (ms) => new Date(ms + this.tzOffsetMin * MIN).toISOString().slice(0, 10);
+    const dFrom = day(t0 - 2 * 24 * HOUR);
+    const dTo = day(t + 24 * HOUR);
+    const receipts = imei ? this.receiptResultsCached(now)
+      .filter((r) => r.imei === imei && (r.id === x.receiptId || ((r.dateTo || r.date) >= dFrom && r.date <= dTo)))
+      .map((r) => ({
+        id: r.id, date: r.date, dateTo: r.dateTo ?? null, time: r.time ?? null, litres: r.litres, station: r.station ?? '',
+        source: r.source ?? 'excel', status: r.status, refuel: r.refuel, missing: r.missing, room: r.room, nofit: !!r.nofit,
+        main: r.id === x.receiptId,
+      }))
+      .sort((a, b) => (b.main - a.main) || a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || '')) : [];
+
+    return {
+      alert,
+      vehicle: {
+        imei,
+        name: rec?.v.name ?? row.name ?? imei,
+        shortName: shortName(rec?.v.name ?? row.name ?? imei ?? ''),
+        plate: rec?.info.plate ?? null,
+        group: rec?.info.group ?? null,
+        hasFuel: rec ? rec.v.hasFuel : true,
+        tankLiters: cal?.tankLiters ?? null,
+      },
+      cal,
+      th: { sensorMinValidMv: th.sensorMinValidMv, powerCutMv: th.powerCutMv, overspeedKmh: th.overspeedKmh },
+      from,
+      to,
+      eventFrom: t0,
+      eventTo: t,
+      samples: downsample(rows, 1600),
+      levels,
+      track: thinTrack(rows, 800),
+      alerts: imei ? this.queryAlerts({ imei, since: from, until: to, limit: 500 }) : [alert],
+      before,
+      after,
+      lostL,
+      receipt: row.type === 'receipt_mismatch' ? { ...receiptOf(row.extra), room: num(x.roomL) } : null,
+      activity: during.length ? { samples: during.length, powerOffMs, engineOnMs, movingMs, noDataMs, maxSpeed: round(maxSpeed), distanceKm: round(gpsDistance(during) / 1000, 1) } : null,
+      place,
+      dataKept: rows.length > 0,
+      keepHours: this.cfg.keepHours,
+      receipts,
+      timezone: this.cfg.timezone,
+      tzOffsetMinutes: this.tzOffsetMin,
+      generatedAt: now,
+    };
+  }
+
+  /** receiptResults, reused for 30 s (an evidence pack asks for it once per page) unless the
+   *  receipts or the refuels changed in between (checkReceipts / deleteReceipt clear it). */
+  receiptResultsCached(now = Date.now()) {
+    const c = this.rcCache;
+    if (c && now - c.at < 30e3 && now >= c.at) return c.list;
+    const list = this.receiptResults(now);
+    this.rcCache = { at: now, list };
+    return list;
   }
 
   /**
@@ -1721,6 +1857,13 @@ function motionIndex(rows, thr24, thr12) {
       return mov[j] - mov[i] < 2 * MIN && eng[j] - eng[i] < 15 * MIN && dist[j] - dist[i] < 300;
     },
   };
+}
+
+function receiptOf(extra) {
+  const x = parseExtra(extra);
+  const litres = num(x.receiptL);
+  const wentIn = num(x.wentInL);
+  return { litres, wentIn, missing: num(x.missingL) ?? (wentIn === null ? litres : null) };
 }
 
 function gpsDistance(rows) {

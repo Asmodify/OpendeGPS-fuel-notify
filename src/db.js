@@ -338,9 +338,13 @@ export class Store {
     return Number(this.db.prepare(`UPDATE alerts SET ${sets.join(', ')} WHERE id = ?`).run(...vals).changes) > 0;
   }
 
-  queryAlerts({ imei, severities, types, since, until, unacked, limit = 200, beforeId } = {}) {
+  queryAlerts({ ids, imei, severities, types, since, until, unacked, limit = 200, beforeId } = {}) {
     const where = [];
     const vals = [];
+    if (ids) {
+      where.push(`id IN (${ids.map(() => '?').join(',') || 'NULL'})`);
+      vals.push(...ids);
+    }
     if (imei) {
       where.push('imei = ?');
       vals.push(imei);
