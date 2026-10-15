@@ -58,6 +58,8 @@
       <symbol id="i-sort" viewBox="0 0 24 24"><path d="M8 9l4-4 4 4M8 15l4 4 4-4"/></symbol>
       <symbol id="i-sheet" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 9h17M3.5 14.5h17M9.5 9v11.5"/></symbol>
       <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M9 16l-4-4 4-4M5 12h10"/></symbol>
+      <symbol id="i-evidence" viewBox="0 0 24 24"><path d="M9 3.5h6v3H9z"/><path d="M15 5h2.5A1.5 1.5 0 0 1 19 6.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5v-13A1.5 1.5 0 0 1 6.5 5H9"/><path d="M8.5 13.5l2.5 2.5 4.5-5"/></symbol>
+      <symbol id="i-print" viewBox="0 0 24 24"><path d="M6.5 9V3.5h11V9"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6.5 14h11v6.5h-11z"/></symbol>
       <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4.2l2 2.5H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
     </defs>
   </svg>
@@ -72,6 +74,7 @@
       <a href="#/fleet" data-view="fleet"><svg class="ic"><use href="#i-truck"/></svg><span>Машинууд</span></a>
       <a href="#/map" data-view="map"><svg class="ic"><use href="#i-map"/></svg><span>Газрын зураг</span></a>
       <a href="#/alerts" data-view="alerts"><svg class="ic"><use href="#i-bell"/></svg><span>Анхааруулга</span><b class="tab-badge" id="tab-badge" hidden></b></a>
+      <a href="#/evidence" data-view="evidence" class="local-only"><svg class="ic"><use href="#i-evidence"/></svg><span>Нотлох баримт</span></a>
       <a href="#/report" data-view="report"><svg class="ic"><use href="#i-report"/></svg><span>Тайлан</span></a>
       <a href="#/settings" data-view="settings"><svg class="ic"><use href="#i-sliders"/></svg><span>Тохиргоо</span></a>
     </nav>
@@ -104,6 +107,13 @@
     <!-- FLEET -->
     <section class="view" id="view-fleet" hidden aria-label="Машинууд">
       <div class="tiles" id="fleet-tiles"></div>
+      <div class="card equip-card" id="fleet-equip">
+        <div class="equip-head">
+          <h3>GPS трекер ба түлшний мэдрэгч ажиллаж байгаа эсэх</h3>
+          <a class="btn small" id="f-xlsx" href="/api/export/fleet-status.xlsx" download title="Бүх машины Excel жагсаалт: GPS ажиллаж байгаа эсэх, түлшний мэдрэгч ажиллаж байгаа эсвэл гэмтэлтэй эсэх"><svg class="ic"><use href="#i-download"/></svg>Төлвийн Excel</a>
+        </div>
+        <div id="fleet-equip-body"></div>
+      </div>
       <div class="filters">
         <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="f-q" type="search" placeholder="Нэр, улсын дугаар, IMEI хайх…" autocomplete="off" aria-label="Машин хайх"></label>
         <select id="f-group" aria-label="Бүлэг"><option value="">Бүх бүлэг</option></select>
@@ -114,11 +124,18 @@
           <option value="parked">Зогсоолд</option>
           <option value="offline">Холбогдоогүй</option>
         </select>
-        <label class="chk"><input type="checkbox" id="f-fuel"> Түлшний мэдрэгчтэй</label>
+        <select id="f-equip" aria-label="Тоног төхөөрөмж">
+          <option value="">Бүх төхөөрөмж</option>
+          <option value="gps-ok">GPS ажиллаж байна</option>
+          <option value="gps-bad">GPS ажиллахгүй</option>
+          <option value="fuel-ok">Түлшний мэдрэгч ажиллаж байна</option>
+          <option value="fuel-bad">Түлшний мэдрэгч гэмтэлтэй</option>
+          <option value="fuel-unchecked">Түлшний мэдрэгч шалгагдаагүй</option>
+          <option value="fuel-any">Түлшний мэдрэгчтэй</option>
+          <option value="fuel-none">Түлшний мэдрэгчгүй</option>
+        </select>
         <label class="chk"><input type="checkbox" id="f-problems"> Зөвхөн асуудалтай</label>
-        <label class="chk"><input type="checkbox" id="f-gps"> GPS ажиллахгүй</label>
         <span class="filter-count" id="f-count"></span>
-        <a class="btn" id="f-xlsx" href="/api/export/fleet-status.xlsx" download title="Бүх машины Excel жагсаалт: GPS ажиллаж байгаа эсэх, түлшний мэдрэгч ажиллаж байгаа эсвэл гэмтэлтэй эсэх"><svg class="ic"><use href="#i-download"/></svg>Төлвийн Excel</a>
       </div>
       <div class="card table-card">
         <table class="tbl fleet-tbl">
@@ -127,6 +144,7 @@
               <th class="c-name"><button type="button" data-sort="name">Машин</button></th>
               <th class="c-group"><button type="button" data-sort="group">Бүлэг</button></th>
               <th class="c-status"><button type="button" data-sort="status">Төлөв</button></th>
+              <th class="c-gps"><button type="button" data-sort="gps">GPS</button></th>
               <th class="c-fuel"><button type="button" data-sort="fuel">Түлш</button></th>
               <th class="c-speed num"><button type="button" data-sort="speed">Хурд</button></th>
               <th class="c-seen"><button type="button" data-sort="seen">Сүүлийн мэдээ</button></th>
@@ -193,6 +211,45 @@
       <div id="a-temp" class="temp-view" role="status" hidden></div>
       <div id="alert-list" class="alert-list"></div>
       <div class="more-row"><button type="button" class="btn" id="a-more" hidden>Өмнөх анхааруулгыг ачаалах</button></div>
+    </section>
+
+    <!-- EVIDENCE: theft alerts picked by truck, dates and tick boxes, printed as one pack -->
+    <section class="view" id="view-evidence" hidden aria-label="Нотлох баримт">
+      <p class="lead">Түлшний хулгайн анхааруулгыг машин, бүлэг, огноогоор шүүж, хэрэгтэйгээ сонгоод нэг дор хэвлэнэ. Эхний хуудас нь нэгтгэл; дараа нь тохиолдол бүрт нэг A4 хуудас: түлшний тоолуурын график, газрын зураг, баримт, гарын үсгийн мөр. Зөвхөн түлшний тоолуур өөрөө буурсан гэж харуулсан тохиолдлыг жагсаана; тоолуур өссөн (цэнэглэлт), буураад буцаж өссөн, мэдрэгч гэмтсэн тохиолдлыг хулгайд тооцохгүй.</p>
+      <div class="filters">
+        <select id="e-veh" aria-label="Машин"><option value="">Бүх машин</option></select>
+        <select id="e-group" aria-label="Бүлэг"><option value="">Бүх бүлэг</option></select>
+        <span class="date-range">
+          <input type="date" id="e-from" aria-label="Эхлэх огноо" required><span class="muted">—</span><input type="date" id="e-to" aria-label="Дуусах огноо" required>
+        </span>
+        <div class="seg small" id="e-days" role="group" aria-label="Сүүлийн">
+          <button type="button" data-days="7">7 хоног</button>
+          <button type="button" data-days="30">30 хоног</button>
+          <button type="button" data-days="90">90 хоног</button>
+        </div>
+      </div>
+      <div class="filters">
+        <div class="seg" id="e-types" role="group" aria-label="Төрөл">
+          <button type="button" data-type="fuel_drain" aria-pressed="true"><i class="sdot critical"></i>Түлш алдагдал</button>
+          <button type="button" data-type="receipt_mismatch" aria-pressed="false" title="Баримтын литрээс бага түлш саванд орсон, эсвэл цэнэглэлт огт харагдаагүй"><i class="sdot warning"></i>Баримтаас дутуу цэнэглэлт</button>
+        </div>
+        <select id="e-verdict" aria-label="Дүгнэлт">
+          <option value="nofalse">Худал дохиог хасах</option>
+          <option value="confirmed">Зөвхөн хулгай батлагдсан</option>
+          <option value="all">Дүгнэлт харгалзахгүй</option>
+        </select>
+        <label class="chk" title="Үүнээс бага алдагдлыг харуулахгүй">Багадаа <input type="number" id="e-min" min="0" max="2000" step="5" value="0" class="e-min" aria-label="Хамгийн бага литр"> л</label>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="e-refresh" title="Дахин ачаалах"><svg class="ic"><use href="#i-refresh"/></svg><span class="hide-sm">Шинэчлэх</span></button>
+      </div>
+      <div id="e-trucks" class="e-trucks" aria-label="Машинаар"></div>
+      <div class="card table-card"><div id="e-list" class="e-list"></div></div>
+      <div class="e-bar" id="e-bar" hidden>
+        <span class="e-count" id="e-count" role="status"></span>
+        <span class="spacer"></span>
+        <a class="btn" id="e-xlsx" href="/api/export/alerts.xlsx" download title="Сонгосон анхааруулгыг Excel файлаар татах"><svg class="ic"><use href="#i-download"/></svg>Excel</a>
+        <button type="button" class="btn primary" id="e-print" title="Шинэ цонхонд хэвлэх хуудсуудыг бэлтгэнэ"><svg class="ic"><use href="#i-print"/></svg>Нотлох баримт бэлтгэх</button>
+      </div>
     </section>
 
     <!-- REPORT -->
@@ -372,8 +429,8 @@
             <button type="button" class="btn small" id="d-zoomreset" hidden><svg class="ic"><use href="#i-expand"/></svg>Бүх хугацааг харуулах</button>
           </div>
           <div class="legend" aria-label="Графикийн тайлбар">
-            <span><i class="lg-level"></i>Найдвартай түвшин (тогтворжсон, зогсоолд)</span>
-            <span><i class="lg-raw"></i>Мэдрэгчийн түүхий заалт</span>
+            <span><i class="lg-raw"></i>Түлшний тоолуурын заалт (бодит, дундажлаагүй)</span>
+            <span><i class="lg-level"></i>Тогтсон түвшин (системийн тооцоо)</span>
             <span><i class="lg-drain"></i>Түлш алдагдал</span>
             <span><i class="lg-refuel"></i>Цэнэглэлт</span>
             <span><i class="lg-nosig"></i>Мэдрэгчийн заалтгүй</span>
