@@ -222,6 +222,19 @@ export function savePref(key, value) {
   try { localStorage.setItem('ftw.' + key, JSON.stringify(value)); } catch { /* storage unavailable */ }
 }
 
+// ---------- View filters (per tab, gone when the tab closes) ----------
+// Every account opens the monitor on the same default view; filters picked in one
+// tab no longer follow that browser around and hide part of the fleet next time.
+export function loadView(key, fallback) {
+  try {
+    const v = sessionStorage.getItem('ftw.view.' + key);
+    return v === null ? fallback : JSON.parse(v);
+  } catch { return fallback; }
+}
+export function saveView(key, value) {
+  try { sessionStorage.setItem('ftw.view.' + key, JSON.stringify(value)); } catch { /* storage unavailable */ }
+}
+
 export function debounce(fn, ms) {
   let t = null;
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
