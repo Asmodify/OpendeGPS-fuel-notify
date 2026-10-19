@@ -2,7 +2,7 @@
 // Consumes only the HTTP API documented in README / the interface contract.
 import {
   html, raw, esc, setHTML, icon, $, $$, fmtTime, fmtFull, fmtRel, fmtDur, fmtDayHeading, dayKey,
-  fmtNum, clamp, isNum, toMs, normCal, mvToPct, dMvToL, dMvToPct, fuelAmount, api, loadPref, savePref,
+  fmtNum, clamp, isNum, toMs, normCal, mvToPct, dMvToL, dMvToPct, fuelAmount, api, loadPref, savePref, loadView, saveView,
   debounce, downloadText, csvCell, onLoginRequired, METER_LABEL, meterConfirms,
 } from './util.js';
 import { FuelChart } from './chart.js';
@@ -105,7 +105,7 @@ const S = {
   es: null,
   sseDropped: false,
   fleet: savedFleetFilters(),
-  map: { filter: loadPref('mapFilter', 'all'), names: loadPref('mapNames', false) },
+  map: { filter: loadView('mapFilter', 'all'), names: loadPref('mapNames', false) },
   alerts: {
     list: [], loading: false, error: null, hasMore: false, loaded: false, newIds: new Set(),
     f: savedAlertFilters(),
@@ -113,19 +113,19 @@ const S = {
   },
   report: { hours: 24, rows: null, loading: false, error: null, sort: 'used', dir: -1, loadedAt: 0 },
   evidence: { f: null, list: [], off: new Set(), loading: false, loaded: false, loadedAt: 0, error: null, limited: false }, // f: evDefaults() once the clock skew is known
-  receipts: { data: null, loading: false, error: null, loadedAt: 0, filter: loadPref('receiptsFilter', 'problems') },
+  receipts: { data: null, loading: false, error: null, loadedAt: 0, filter: loadView('receiptsFilter', 'problems') },
   seen: new Set(),
   prefs: { sound: loadPref('sound', true), bsev: loadPref('bsev', ['critical', 'warning']), theme: loadPref('theme', 'auto') },
   detail: null,
   lastFocus: null,
 };
 function savedAlertFilters() {
-  return { sev: [...SEVS], type: '', imei: '', range: 72, unacked: false, ...pick(loadPref('alertFilters', {}), ['sev', 'type', 'imei', 'range', 'unacked']) };
+  return { sev: [...SEVS], type: '', imei: '', range: 72, unacked: false, ...pick(loadView('alertFilters', {}), ['sev', 'type', 'imei', 'range', 'unacked']) };
 }
 /** equip: '' or an EQUIP_FILTER key (GPS tracker / fuel sensor working or not). Older saved
  *  filters had two tick boxes: "with a fuel sensor" and "GPS not working". */
 function savedFleetFilters() {
-  const p = loadPref('fleet', {});
+  const p = loadView('fleet', {});
   const old = p && p.equip === undefined ? (p.gps ? 'gps-bad' : p.fuel ? 'fuel-any' : '') : '';
   return { q: '', group: '', status: '', equip: old, problems: false, sort: 'alerts', dir: -1, ...pick(p, ['group', 'status', 'equip', 'problems', 'sort', 'dir']) };
 }
@@ -714,6 +714,18 @@ async function submitLogin(e) {
     btn.disabled = false;
   }
 }
+// Opened from the admin web's menu (admin.opendevelopment.mn): #sso=<its session token>.
+// The token is taken out of the address at once and checked by this server with the API.
+async function signInFromAdminWeb() {
+  const m = /^#sso=([^&]+)$/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    await fetch('/api/sso', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: decodeURIComponent(m[1]) }), cache: 'no-store',
+    });
+  } catch { /* the sign-in screen stays as the fallback */ }
+}
 async function logout() {
   try { await fetch('/api/logout', { method: 'POST', cache: 'no-store' }); } catch { /* signed out locally anyway */ }
   location.reload();
@@ -1107,7 +1119,7 @@ function syncAlertControls() {
   const who = f.imei ? vName(f.imei) : null;
   $('#a-ackall').title = who ? `${who} машины бүх нээлттэй анхааруулгатай танилцсан гэж тэмдэглэх` : 'Бүх машины бүх нээлттэй анхааруулгатай танилцсан гэж тэмдэглэх';
 }
-function saveAlertFilters() { S.alerts.temp = null; savePref('alertFilters', S.alerts.f); }
+function saveAlertFilters() { S.alerts.temp = null; saveView('alertFilters', S.alerts.f); }
 /** Show the Alerts view with a shortcut's filter, without replacing the saved filters. */
 function showTempAlerts(f, label) {
   S.alerts.f = { ...S.alerts.f, ...f };
@@ -1393,14 +1405,14 @@ const isoDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${p2
 const dayStartMs = (day) => new Date(`${day}T00:00:00`).getTime();
 const evidenceUrl = (ids) => `evidence.html#ids=${ids.join(',')}`;
 function evDefaults() {
-  const saved = pick(loadPref('evidenceFilters.v2', {}), ['imei', 'group', 'types', 'verdict', 'minL', 'days']);
+  const saved = pick(loadView('evidenceFilters.v2', {}), ['imei', 'group', 'types', 'verdict', 'minL', 'days']);
   const days = [7, 30, 90].includes(saved.days) ? saved.days : 30;
   const to = isoDay(now());
   return { imei: '', group: '', types: [...EV_DEFAULT_TYPES], verdict: 'nofalse', minL: 0, ...saved, days, from: isoDay(now() - (days - 1) * 24 * HOUR), to, unconfirmed: false };
 }
 function saveEvFilters() {
   const { imei, group, types, verdict, minL, days } = S.evidence.f;
-  savePref('evidenceFilters.v2', { imei, group, types, verdict, minL, days });
+  saveView('evidenceFilters.v2', { imei, group, types, verdict, minL, days });
 }
 function syncEvControls() {
   const f = S.evidence.f;
@@ -2549,7 +2561,7 @@ function bindStatic() {
     const b = e.target.closest('[data-f]');
     if (!b) return;
     S.map.filter = b.dataset.f;
-    savePref('mapFilter', S.map.filter);
+    saveView('mapFilter', S.map.filter);
     renderMap();
   });
   $('#map-names').addEventListener('change', (e) => {
@@ -2684,7 +2696,7 @@ function bindStatic() {
     const b = e.target.closest('[data-f]');
     if (!b) return;
     S.receipts.filter = b.dataset.f;
-    savePref('receiptsFilter', S.receipts.filter);
+    saveView('receiptsFilter', S.receipts.filter);
     renderReceipts();
   });
   $('#r-rc-list').addEventListener('click', (e) => {
@@ -2886,7 +2898,7 @@ function alertFilterChanged() {
 }
 function saveFleet() {
   const { group, status, equip, problems, sort, dir } = S.fleet;
-  savePref('fleet', { group, status, equip, problems, sort, dir });
+  saveView('fleet', { group, status, equip, problems, sort, dir });
 }
 function syncFleetControls() {
   $('#f-q').value = S.fleet.q;
@@ -2912,6 +2924,7 @@ function tickRelative() {
 
 // ---------------------------------------------------------------- boot
 async function init() {
+  await signInFromAdminWeb();
   bindStatic();
   applyTheme();
   syncFleetControls();

@@ -7,6 +7,7 @@ import { fleetStatusXlsxOpts } from './fleetstatus.js';
 import { ALERTS_EXPORT_MAX, alertFilterFromQuery, alertsXlsxName, alertsXlsxOpts, buildAlertSheets } from './alertsxlsx.js';
 import { refuelFillSpots } from './refuelplaces.js';
 import { log, errText, shortName } from './util.js';
+import { openTeeSettings } from './opentee.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -75,6 +76,8 @@ function attachment(name) {
 // ---- sign-in (server install): DASHBOARD_PASSWORD + SESSION_SECRET turn it on --------------
 const COOKIE = 'ftw_session';
 const SESSION_DAYS = 30;
+// Sign-in from the admin web (no dashboard password): 15 days, as the user asked (2026-10-19).
+const SSO_DAYS = 15;
 const LOGIN_MAX_FAILS = 10; // per IP within LOGIN_WINDOW_MS
 const LOGIN_WINDOW_MS = 15 * 60e3;
 const digest = (x) => crypto.createHash('sha256').update(String(x)).digest();
@@ -95,26 +98,67 @@ function makeAuth(cfg) {
   const hmac = (x) => crypto.createHmac('sha256', secret).update(x).digest('base64url');
   const fails = new Map(); // ip -> [times]
   const secure = cfg.cookieSecure ? '; Secure' : '';
+  const throttle = (ip, now) => {
+    const list = (fails.get(ip) || []).filter((t) => now - t < LOGIN_WINDOW_MS);
+    if (list.length >= LOGIN_MAX_FAILS) throw new HttpError(429, 'Хэт олон удаа буруу оролдлоо. 15 минутын дараа дахин оролдоно уу.');
+    return list;
+  };
+  const fail = (ip, list, now) => {
+    list.push(now);
+    fails.set(ip, list);
+    if (fails.size > 10000) fails.clear();
+  };
   return {
     cookie: (value, maxAge) => `${COOKIE}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure}`,
-    make(now = Date.now()) {
-      const exp = Math.floor(now / 1000) + SESSION_DAYS * 86400;
-      return `${exp}.${hmac(`ftw1.${exp}`)}`;
+    /** readOnly: the accountant (views only, as in the admin web). */
+    make(now = Date.now(), seconds = SESSION_DAYS * 86400, readOnly = false) {
+      const exp = Math.floor(now / 1000) + seconds;
+      const body = readOnly ? `${exp}.r` : String(exp);
+      return `${body}.${hmac(`ftw1.${body}`)}`;
     },
-    valid(req, now = Date.now()) {
-      const m = /^(\d{9,12})\.([A-Za-z0-9_-]{43})$/.exec(String(cookieOf(req, COOKIE) || ''));
-      return !!m && Number(m[1]) * 1000 > now && sameSecret(m[2], hmac(`ftw1.${m[1]}`));
+    /** null when not signed in, else { readOnly }. */
+    session(req, now = Date.now()) {
+      const m = /^((\d{9,12})(\.r)?)\.([A-Za-z0-9_-]{43})$/.exec(String(cookieOf(req, COOKIE) || ''));
+      if (!m || Number(m[2]) * 1000 <= now || !sameSecret(m[4], hmac(`ftw1.${m[1]}`))) return null;
+      return { readOnly: !!m[3] };
     },
     check(ip, pw, now = Date.now()) {
-      const list = (fails.get(ip) || []).filter((t) => now - t < LOGIN_WINDOW_MS);
-      if (list.length >= LOGIN_MAX_FAILS) throw new HttpError(429, 'Хэт олон удаа буруу оролдлоо. 15 минутын дараа дахин оролдоно уу.');
+      const list = throttle(ip, now);
       if (sameSecret(String(pw ?? ''), password)) { fails.delete(ip); return true; }
-      list.push(now);
-      fails.set(ip, list);
-      if (fails.size > 10000) fails.clear();
+      fail(ip, list, now);
       return false;
     },
+    /** Sign-in with the admin web's own session token (see adminWebUser). */
+    async checkAdminWeb(ip, token, lookup, now = Date.now()) {
+      const list = throttle(ip, now);
+      const user = await lookup(token);
+      if (user) { fails.delete(ip); return user; }
+      fail(ip, list, now);
+      return null;
+    },
   };
+}
+
+// Admin web roles that see the fuel monitor (HR and drivers do not, as in the admin web menu).
+const ADMIN_WEB_ROLES = new Set(['superadmin', 'company_admin', 'dispatcher', 'accountant', 'mechanic']);
+
+/** The admin web user behind `token` (checked once with the Open Teever API), or null. */
+export async function adminWebUser(apiUrl, token, fetchFn = fetch) {
+  if (typeof token !== 'string' || token.length < 20 || token.length > 4096 || !/^[\w.~+/=-]+$/.test(token)) return null;
+  try {
+    const res = await fetchFn(`${apiUrl}/api/v1/user/getMe`, {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const user = (await res.json())?.data;
+    const roles = [user?.role, ...(Array.isArray(user?.roles) ? user.roles : [])].filter((r) => ADMIN_WEB_ROLES.has(r));
+    if (!roles.length) return null;
+    // Several roles: the strongest one decides; only a pure accountant is read-only.
+    return { id: user.id, readOnly: roles.every((r) => r === 'accountant') };
+  } catch {
+    return null;
+  }
 }
 
 function clientIp(req, trustProxy) {
@@ -134,11 +178,13 @@ const intParam = (v) => {
 };
 const listParam = (v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined);
 
-export function createHandler({ cfg, engine, poller, notifier, hub, ledger }) {
+export function createHandler({ cfg, engine, poller, notifier, hub, ledger, lookupAdminWeb }) {
   const publicDir = path.resolve(cfg.publicDir);
   const loopbackOnly = ['127.0.0.1', 'localhost', '::1'].includes(cfg.host);
   const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
   const auth = makeAuth(cfg);
+  const apiUrl = openTeeSettings(cfg).url;
+  const lookup = lookupAdminWeb || ((token) => adminWebUser(apiUrl, token));
   const onServer = process.platform !== 'win32';
 
   function guard(req, url) {
@@ -180,8 +226,16 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger }) {
         if (!auth.check(clientIp(req, cfg.trustProxy), body?.password)) throw new HttpError(401, 'Нууц үг буруу байна');
         return send(res, 200, { ok: true }, { 'set-cookie': auth.cookie(auth.make(), SESSION_DAYS * 86400) });
       }
+      if (m === 'POST' && p === '/api/sso') {
+        const body = await readJson(req, 8192);
+        const user = await auth.checkAdminWeb(clientIp(req, cfg.trustProxy), body?.token, lookup);
+        if (!user) throw new HttpError(401, 'Админ вебийн нэвтрэлт хүчингүй байна');
+        return send(res, 200, { ok: true, readOnly: user.readOnly }, { 'set-cookie': auth.cookie(auth.make(Date.now(), SSO_DAYS * 86400, user.readOnly), SSO_DAYS * 86400) });
+      }
       if (m === 'POST' && p === '/api/logout') return send(res, 200, { ok: true }, { 'set-cookie': auth.cookie('', 0) });
-      if (!auth.valid(req)) return send(res, 401, { error: 'login_required' });
+      const session = auth.session(req);
+      if (!session) return send(res, 401, { error: 'login_required' });
+      if (session.readOnly && m !== 'GET' && m !== 'HEAD') throw new HttpError(403, 'Нягтлан зөвхөн харах эрхтэй');
     }
 
     if (m === 'GET' && p === '/api/meta') {
