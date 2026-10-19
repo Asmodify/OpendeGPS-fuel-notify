@@ -10,6 +10,7 @@ import { PLACE_RADIUS_M, groupPlaces, namedPlaces, validPos } from './refuelplac
 const MIN = 60e3;
 // far more than a 90-day range ever holds, and well inside Excel's 1 048 576 rows
 export const ALERTS_EXPORT_MAX = 100_000;
+export const ALERT_IDS_MAX = 2000;
 
 const VERDICT_LABEL = { unchecked: 'Шалгаагүй', confirmed: 'Хулгай батлагдсан', false_alarm: 'Худал дохио' };
 const YES = 'ТИЙМ';
@@ -18,7 +19,10 @@ const SEV_TONE = { [SEV_LABEL.critical]: 'bad', [SEV_LABEL.warning]: 'warn' };
 
 /** The filter of GET /api/alerts and the export, from a request's query string. */
 export function alertFilterFromQuery(q, { intParam, listParam }) {
+  // ids: the alerts picked one by one (the evidence page), at most ALERT_IDS_MAX of them
+  const ids = listParam(q.get('ids'))?.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0).slice(0, ALERT_IDS_MAX);
   return {
+    ...(ids ? { ids } : {}),
     imei: q.get('imei') || undefined,
     severities: listParam(q.get('severity')),
     types: listParam(q.get('type')),
@@ -28,6 +32,9 @@ export function alertFilterFromQuery(q, { intParam, listParam }) {
   };
 }
 
+// litres of an alert: the refuel / drain amount, or what a fuel receipt is missing from the tank
+const litresOf = (a) => (Number.isFinite(a.amountL) ? a.amountL : a.type === 'receipt_mismatch' && Number.isFinite(a.receipt?.missing) ? a.receipt.missing : null);
+const THEFT_TYPES = ['fuel_drain', 'receipt_mismatch'];
 const typeLabel = (type, alertTypes) => alertTypes?.[type]?.label ?? TYPE_LABELS[type] ?? type;
 const localTime = (t, tzMin) => new Date(t + tzMin * MIN).toISOString().slice(0, 16).replace('T', ' ');
 const mapLink = (lat, lng) => (validPos(lat, lng) ? { text: 'Газрын зураг', url: `https://maps.google.com/?q=${lat.toFixed(6)},${lng.toFixed(6)}` } : null);
@@ -92,7 +99,7 @@ export function buildAlertSheets({ alerts = [], filter = {}, alertTypes = {}, ve
     SEV_LABEL[a.severity] ?? a.severity ?? '',
     typeLabel(a.type, alertTypes),
     a.title ?? '',
-    Number.isFinite(a.amountL) ? a.amountL : null,
+    litresOf(a),
     placeLabel(a),
     mapLink(pos(a).lat, pos(a).lng),
     coordText(pos(a).lat, pos(a).lng),
@@ -105,10 +112,11 @@ export function buildAlertSheets({ alerts = [], filter = {}, alertTypes = {}, ve
     a.id ?? null,
   ]);
 
-  // one type of alert (e.g. only refuels): its litres add up to something meaningful
+  // one type of alert (e.g. only refuels), or only thefts: their litres add up to something meaningful
   const types = new Set(alerts.map((a) => a.type));
-  const litres = alerts.filter((a) => Number.isFinite(a.amountL));
-  const totalL = types.size === 1 && litres.length ? round(litres.reduce((s, a) => s + a.amountL, 0), 1) : null;
+  const litres = alerts.map(litresOf).filter((L) => L !== null);
+  const sameKind = types.size === 1 || [...types].every((t) => THEFT_TYPES.includes(t));
+  const totalL = sameKind && litres.length ? round(litres.reduce((s, L) => s + L, 0), 1) : null;
   const totalRow = totalL === null ? undefined : ['Нийт', null, `${alerts.length} анхааруулга`, null, null, null, null, totalL];
 
   const sevs = filter.severities?.length ? filter.severities : null;
@@ -174,6 +182,7 @@ export function buildAlertSheets({ alerts = [], filter = {}, alertTypes = {}, ve
         `Зэрэглэл: ${sevs ? sevs.map((s) => SEV_LABEL[s] ?? s).join(', ') : 'бүгд'}`,
         `Төрөл: ${typeList ? typeList.map((t) => typeLabel(t, alertTypes)).join(', ') : 'бүгд'}`,
         `Машин: ${filter.imei ? vehicleName || filter.imei : 'бүх машин'}`,
+        ...(filter.ids ? [`Нэг бүрчлэн сонгосон: ${filter.ids.length} анхааруулга`] : []),
         `Зөвхөн танилцаагүй: ${filter.unacked ? YES : NO}`,
         '',
         { text: `НИЙТ: ${alerts.length} анхааруулга${totalL === null ? '' : ` · ${totalL.toLocaleString('en-US')} литр`}`, bold: true },
@@ -194,7 +203,7 @@ export function buildAlertSheets({ alerts = [], filter = {}, alertTypes = {}, ve
 /** Download name: "Анхааруулга <type> <vehicle> <day>.xlsx" (the parts that were filtered). */
 export function alertsXlsxName({ filter = {}, alertTypes = {}, vehicleName, now = Date.now(), tzOffsetMinutes: tzMin = 480 } = {}) {
   const day = new Date(now + tzMin * MIN).toISOString().slice(0, 10);
-  const parts = ['Анхааруулга'];
+  const parts = [filter.ids ? 'Нотлох баримт' : 'Анхааруулга'];
   if (filter.types?.length === 1) parts.push(typeLabel(filter.types[0], alertTypes));
   if (filter.imei) parts.push(vehicleName || filter.imei);
   parts.push(day);

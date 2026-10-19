@@ -33,10 +33,22 @@ export function gpsFault(v, th, now = Date.now()) {
   return null;
 }
 
+/** Why a fuel sensor is not working (vehicleView fuel.fault.code): a short label for the
+ *  fleet screen and a sentence for the tooltip and the Excel. */
+export const FUEL_FAULT = {
+  nosignal: { short: 'Дохиогүй', text: 'Машин тэжээлтэй байхад хүчинтэй заалт өгөхгүй: утас тасарсан, салсан эсвэл эвдэрсэн' },
+  frozen: { short: 'Заалт хөдлөхгүй', text: 'Удаан явахад заалт нь огт өөрчлөгдөхгүй: мэдрэгч гацсан эсвэл салсан' },
+  stuck: { short: 'Заалт хөдлөхгүй', text: 'Сүүлийн хоногт 2 цагаас олон явахад түвшин өөрчлөгдөөгүй: мэдрэгч гацсан' },
+  limit: { short: '10 В-д гацсан', text: 'Заалт мэдрэгчийн дээд хязгаар 10 В дээр тогтсон: утас эсвэл мэдрэгч гэмтэлтэй, түвшин үнэн биш' },
+  outside: { short: 'Савнаас их заалт', text: 'Зогсож байхад савны багтаамжаас их түлш заадаг: мэдрэгч эсвэл тохируулга буруу' },
+};
+export const fuelFaultInfo = (code) => ({ code, ...(FUEL_FAULT[code] || FUEL_FAULT.nosignal) });
+
 /**
  * The fuel sensor's state for a vehicleView:
  *   none    - no fuel sensor fitted
- *   fault   - not giving valid readings while the vehicle has power
+ *   fault   - not giving valid readings while the vehicle has power, or readings that are no
+ *             level (frozen, stuck at the 10 V limit, past a full tank): fuel.fault says which
  *   ok      - giving a level
  *   nodata  - the tracker has been silent GPS_SILENT_MS or more (or never reported): the
  *             sensor cannot be judged now, whatever it showed before
@@ -93,7 +105,8 @@ export function buildFleetStatusSheets({ vehicles = [], now = Date.now(), tzOffs
   const list = [...vehicles].sort((a, b) => rank(a) - rank(b) || byName(a, b));
   const problems = (v) => [
     v.gpsFault ? `GPS: ${v.gpsFault.text.charAt(0).toLowerCase()}${v.gpsFault.text.slice(1)}` : '',
-    FUEL_PROBLEM[v.fuelSensor] ? `Түлшний мэдрэгч: ${FUEL_PROBLEM[v.fuelSensor]}` : '',
+    v.fuelSensor === 'fault' && v.fuel?.fault?.text ? `Түлшний мэдрэгч: ${v.fuel.fault.text.charAt(0).toLowerCase()}${v.fuel.fault.text.slice(1)}`
+      : FUEL_PROBLEM[v.fuelSensor] ? `Түлшний мэдрэгч: ${FUEL_PROBLEM[v.fuelSensor]}` : '',
   ].filter(Boolean).join('; ');
   const row = (v) => [
     label(v),
@@ -182,7 +195,7 @@ export function buildFleetStatusSheets({ vehicles = [], now = Date.now(), tzOffs
         '',
         { text: 'ХЭРХЭН ДҮГНЭСЭН', bold: true },
         p('GPS АЖИЛЛАХГҮЙ: 6 цаг ба түүнээс удаан мэдээлэлгүй (богино тасалдал ихэвчлэн сүлжээгүй газраас болдог), хэзээ ч мэдээлээгүй, GPS байршилгүй мэдээлж байгаа, эсвэл трекер машины тэжээлгүй байхад явж / асаалттай зогсож байгаа (салгасан эсвэл утас тасарсан). Зогсоолд тэжээлгүй байх нь масс таслуур унтраасных бөгөөд хэвийн.'),
-        p('Түлшний мэдрэгч ГЭМТЭЛТЭЙ: машин тэжээлтэй байхад хүчинтэй заалт өгөхгүй. ШАЛГАГДААГҮЙ: трекер мэдээлэл илгээхгүй тул мэдрэгчийг харах боломжгүй (эхлээд GPS-ийг засна уу), эсвэл машин тогтвортой заалт авах хангалттай удаан зогсоогүй.'),
+        p('Түлшний мэдрэгч ГЭМТЭЛТЭЙ: машин тэжээлтэй байхад хүчинтэй заалт өгөхгүй, удаан явахад заалт нь хөдлөхгүй, 10 В-ын дээд хязгаар дээр гацсан, эсвэл савны багтаамжаас их заадаг. ШАЛГАГДААГҮЙ: трекер мэдээлэл илгээхгүй тул мэдрэгчийг харах боломжгүй (эхлээд GPS-ийг засна уу), эсвэл машин тогтвортой заалт авах хангалттай удаан зогсоогүй.'),
         p('Excel дээр “Машинуудын төлөв” хуудасны гарчгийн мөрийн шүүлтүүрийн товчоор жишээ нь зөвхөн GPS трекер = АЖИЛЛАХГҮЙ-г харуулж болно.'),
         ...(dupes.length ? [p(`GPS сервер дээр нэг машинд хоёр трекер бүртгэгдсэн: ${dupes.join(', ')} — “(трекер …IMEI-ийн сүүлийн 4 орон)” гэж харуулсан. Ихэвчлэн нэг нь солигдсон хуучин трекер байдаг; GPS серверээс устгавал АЖИЛЛАХГҮЙ жагсаалтаас хасагдана.`)] : []),
       ],

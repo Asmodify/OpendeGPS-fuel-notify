@@ -291,6 +291,8 @@ export class VehicleDetector {
       level: this.level,
       levelT: this.levelT,
       sensorOk,
+      // why sensorOk is false: no valid signal, or a reading frozen through long driving
+      sensorFault: sensorOk === false ? (this.sensorLost || !this.sensorEverValid ? 'nosignal' : 'frozen') : null,
       stopped: !!this.stop,
       idleSince: this.stop && this.stop.idle ? this.stop.idle.start : null,
       consumptionMvPerHour: Math.round(rates.length >= 3 ? median(rates) : th.consumptionMvPerHour),
