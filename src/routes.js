@@ -142,8 +142,9 @@ function makeAuth(cfg) {
 // Admin web roles that see the fuel monitor (HR and drivers do not, as in the admin web menu).
 const ADMIN_WEB_ROLES = new Set(['superadmin', 'company_admin', 'dispatcher', 'accountant', 'mechanic']);
 
-/** The admin web user behind `token` (checked once with the Open Teever API), or null. */
-export async function adminWebUser(apiUrl, token, fetchFn = fetch) {
+/** The admin web user behind `token` (checked once with the Open Teever API), or null.
+ *  Only staff of `companyIds` get in (a superadmin always): the monitor shows the whole fleet. */
+export async function adminWebUser(apiUrl, token, companyIds = [], fetchFn = fetch) {
   if (typeof token !== 'string' || token.length < 20 || token.length > 4096 || !/^[\w.~+/=-]+$/.test(token)) return null;
   try {
     const res = await fetchFn(`${apiUrl}/api/v1/user/getMe`, {
@@ -154,8 +155,11 @@ export async function adminWebUser(apiUrl, token, fetchFn = fetch) {
     const user = (await res.json())?.data;
     const roles = [user?.role, ...(Array.isArray(user?.roles) ? user.roles : [])].filter((r) => ADMIN_WEB_ROLES.has(r));
     if (!roles.length) return null;
+    const superadmin = roles.includes('superadmin');
+    const company = String(user?.companyId || user?.company_id || '').toLowerCase();
+    if (!superadmin && !(company && companyIds.includes(company))) return null;
     // Several roles: the strongest one decides; only a pure accountant is read-only.
-    return { id: user.id, readOnly: roles.every((r) => r === 'accountant') };
+    return { id: user._id || user.id || null, readOnly: roles.every((r) => r === 'accountant') };
   } catch {
     return null;
   }
@@ -184,7 +188,7 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger, look
   const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
   const auth = makeAuth(cfg);
   const apiUrl = openTeeSettings(cfg).url;
-  const lookup = lookupAdminWeb || ((token) => adminWebUser(apiUrl, token));
+  const lookup = lookupAdminWeb || ((token) => adminWebUser(apiUrl, token, cfg.ssoCompanyIds || []));
   const onServer = process.platform !== 'win32';
 
   function guard(req, url) {
