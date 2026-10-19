@@ -714,15 +714,32 @@ async function submitLogin(e) {
     btn.disabled = false;
   }
 }
-// Opened from the admin web's menu (admin.opendevelopment.mn): #sso=<its session token>.
-// The token is taken out of the address at once and checked by this server with the API.
+// Opened from the admin web's menu (admin.opendevelopment.mn) as fuel…/#sso: the admin web
+// hands over its session token by postMessage (never in an address, so not in history),
+// this server checks it once with the API, and the tab forgets who opened it.
+const ADMIN_WEB_ORIGINS = ['https://admin.opendevelopment.mn'];
 async function signInFromAdminWeb() {
-  const m = /^#sso=([^&]+)$/.exec(location.hash);
-  if (!m) return;
+  if (!/^#sso(=|$)/.test(location.hash)) return;
+  const old = location.hash !== '#sso'; // the first version put the token in the address: drop it unused
   history.replaceState(null, '', location.pathname + location.search);
+  if (old) return;
+  const opener = window.opener;
+  if (!opener) return;
+  const token = await new Promise((resolve) => {
+    const done = (v) => { window.removeEventListener('message', onMsg); clearTimeout(timer); resolve(v); };
+    const onMsg = (e) => {
+      if (e.source !== opener || !ADMIN_WEB_ORIGINS.includes(e.origin)) return;
+      if (e.data && e.data.type === 'ftw-sso-token' && typeof e.data.token === 'string') done(e.data.token);
+    };
+    const timer = setTimeout(() => done(null), 8000);
+    window.addEventListener('message', onMsg);
+    for (const origin of ADMIN_WEB_ORIGINS) { try { opener.postMessage({ type: 'ftw-sso-ready' }, origin); } catch { /* other origin */ } }
+  });
+  try { window.opener = null; } catch { /* read-only in some browsers */ }
+  if (!token) return;
   try {
     await fetch('/api/sso', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: decodeURIComponent(m[1]) }), cache: 'no-store',
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }), cache: 'no-store',
     });
   } catch { /* the sign-in screen stays as the fallback */ }
 }

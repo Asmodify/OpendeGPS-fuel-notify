@@ -170,6 +170,10 @@ export function loadConfig(env = process.env) {
   // server install: a password for the dashboard (and a secret that keeps sessions across restarts)
   cfg.dashboardPassword = String(env.DASHBOARD_PASSWORD || cfg.dashboardPassword || '');
   cfg.sessionSecret = String(env.SESSION_SECRET || '');
+  // sign-in from the admin web: only staff of these companies (Open Development LLC by default);
+  // a superadmin always gets in
+  cfg.ssoCompanyIds = String(env.SSO_COMPANY_IDS || cfg.ssoCompanyIds || '16e26851-0dcc-5693-8c8e-5ed380e0c70d')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   cfg.trustProxy = env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true';
   cfg.cookieSecure = env.COOKIE_SECURE === '1' || env.COOKIE_SECURE === 'true';
   cfg.noBackfill = env.NO_BACKFILL === '1' || env.NO_BACKFILL === 'true';

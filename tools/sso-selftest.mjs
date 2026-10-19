@@ -50,14 +50,19 @@ try {
 
   // the real lookup: roles from GET /api/v1/user/getMe
   const stub = (data, status = 200) => async () => ({ ok: status === 200, json: async () => ({ data }) });
+  const OD = '16e26851-0dcc-5693-8c8e-5ed380e0c70d';
   const T = 'eyJhbGciOiJIUzI1NiJ9.eyJJZCI6IjEifQ.abc_def-123';
-  assert.deepEqual(await adminWebUser('https://x', T, stub({ id: 'a', role: 'dispatcher' })), { id: 'a', readOnly: false });
-  assert.deepEqual(await adminWebUser('https://x', T, stub({ id: 'b', role: 'accountant' })), { id: 'b', readOnly: true });
-  assert.deepEqual(await adminWebUser('https://x', T, stub({ id: 'c', role: 'accountant', roles: ['mechanic'] })), { id: 'c', readOnly: false });
-  assert.equal(await adminWebUser('https://x', T, stub({ id: 'd', role: 'hr' })), null);
-  assert.equal(await adminWebUser('https://x', T, stub({ id: 'e', role: 'driver' })), null);
-  assert.equal(await adminWebUser('https://x', T, stub(null, 401)), null);
+  assert.deepEqual(await adminWebUser('https://x', T, [OD], stub({ _id: 'a', role: 'dispatcher', companyId: OD })), { id: 'a', readOnly: false });
+  assert.deepEqual(await adminWebUser('https://x', T, [OD], stub({ _id: 'b', role: 'accountant', companyId: OD })), { id: 'b', readOnly: true });
+  assert.deepEqual(await adminWebUser('https://x', T, [OD], stub({ _id: 'c', role: 'accountant', roles: ['mechanic'], companyId: OD })), { id: 'c', readOnly: false });
+  assert.equal(await adminWebUser('https://x', T, [OD], stub({ id: 'd', role: 'hr' })), null);
+  assert.equal(await adminWebUser('https://x', T, [OD], stub({ id: 'e', role: 'driver' })), null);
+  assert.equal(await adminWebUser('https://x', T, [OD], stub(null, 401)), null);
   assert.equal(await adminWebUser('https://x', 'short', stub({ id: 'f', role: 'superadmin' })), null);
+  assert.equal(await adminWebUser('https://x', T, [OD], stub({ _id: 'g', role: 'company_admin', companyId: '11111111-2222-3333-4444-555555555555' })), null);
+  assert.equal(await adminWebUser('https://x', T, [OD], stub({ _id: 'h', role: 'dispatcher', companyId: null })), null);
+  assert.deepEqual(await adminWebUser('https://x', T, [OD], stub({ _id: 'i', role: 'superadmin', companyId: null })), { id: 'i', readOnly: false });
+  ok('company rule: only Open Development staff (and superadmin); other companies refused');
   ok('role rules: staff in, accountant read-only, HR and drivers out');
 } finally {
   server.close();
