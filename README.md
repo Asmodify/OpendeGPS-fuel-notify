@@ -30,7 +30,10 @@ events trigger notifications.
   are broken (and why: no signal, a reading that never moves while driving, stuck at the 10 V
   limit, more than a full tank) or could not be checked; each number filters the list. Click a
   vehicle for its fuel chart, route and alert history.
-- **Map** – where every vehicle is now.
+- **Map** – where every vehicle is now. A panel beside it searches by plate (part of it is enough,
+  spaces and dashes ignored), filters by group and status and lists the trucks; picking one flies
+  the map to it, rings it and opens its card. Every group list shows how many trucks the group has,
+  and the Fleet numbers follow the chosen group.
 - **Alerts** – everything that was detected, newest first. Acknowledge alerts once you have
   looked at them.
 - **Evidence** (Нотлох баримт) – fuel drains and receipts the tank does not account for, picked

@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==" crossorigin="anonymous" referrerpolicy="no-referrer">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="style.css">
   <script>
     // Apply a saved theme choice before first paint (auto = follow the OS).
@@ -83,7 +83,7 @@
 
   <div class="shell">
   <header class="topbar">
-    <h1 class="page-title" id="page-title">Машинууд</h1>
+    <div class="page-head"><h1 class="page-title" id="page-title">Машинууд</h1><span class="page-sub" id="page-sub" aria-live="polite"></span></div>
     <div class="top-right">
       <div class="conn" id="conn" data-state="connecting" title="Сервертэй холболт">
         <i class="dot" aria-hidden="true"></i><span id="conn-text">Холбогдож байна…</span>
@@ -109,12 +109,13 @@
       <div class="tiles" id="fleet-tiles"></div>
       <div class="card equip-card" id="fleet-equip">
         <div class="equip-head">
-          <h3>GPS трекер ба түлшний мэдрэгч ажиллаж байгаа эсэх</h3>
+          <h3>Төхөөрөмж ажиллаж байгаа эсэх</h3>
           <a class="btn small" id="f-xlsx" href="/api/export/fleet-status.xlsx" download title="Бүх машины Excel жагсаалт: GPS ажиллаж байгаа эсэх, түлшний мэдрэгч ажиллаж байгаа эсвэл гэмтэлтэй эсэх"><svg class="ic"><use href="#i-download"/></svg>Төлвийн Excel</a>
         </div>
         <div id="fleet-equip-body"></div>
       </div>
-      <div class="filters">
+      <div class="card table-card">
+      <div class="filters card-toolbar">
         <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="f-q" type="search" placeholder="Нэр, улсын дугаар, IMEI хайх…" autocomplete="off" aria-label="Машин хайх"></label>
         <select id="f-group" aria-label="Бүлэг"><option value="">Бүх бүлэг</option></select>
         <select id="f-status" aria-label="Төлөв">
@@ -137,7 +138,6 @@
         <label class="chk"><input type="checkbox" id="f-problems"> Зөвхөн асуудалтай</label>
         <span class="filter-count" id="f-count"></span>
       </div>
-      <div class="card table-card">
         <table class="tbl fleet-tbl">
           <thead>
             <tr>
@@ -159,29 +159,38 @@
 
     <!-- MAP -->
     <section class="view" id="view-map" hidden aria-label="Газрын зураг">
-      <div class="map-wrap card">
-        <div id="map" class="map"></div>
-        <div class="map-tools">
-          <div class="seg" id="map-filter" role="group" aria-label="Газрын зурагт харуулах">
-            <button type="button" data-f="all" aria-pressed="true">Бүгд</button>
-            <button type="button" data-f="problems" aria-pressed="false">Асуудалтай</button>
-            <button type="button" data-f="moving" aria-pressed="false">Явж байна</button>
-            <button type="button" data-f="idle" aria-pressed="false">Асаалттай зогссон</button>
-            <button type="button" data-f="parked" aria-pressed="false">Зогсоолд</button>
-            <button type="button" data-f="offline" aria-pressed="false">Холбогдоогүй</button>
+      <div class="map-layout card">
+        <aside class="map-side" aria-label="Машин хайх">
+          <div class="map-find">
+            <label class="search map-search"><svg class="ic"><use href="#i-search"/></svg><input id="map-q" type="search" placeholder="Улсын дугаар хайх…" autocomplete="off" aria-label="Газрын зураг дээр машин хайх" aria-controls="map-list"></label>
+            <select id="m-group" aria-label="Бүлэг"><option value="">Бүх бүлэг</option></select>
+            <div class="seg small map-filter" id="map-filter" role="group" aria-label="Газрын зурагт харуулах">
+              <button type="button" data-f="all" aria-pressed="true">Бүгд</button>
+              <button type="button" data-f="problems" aria-pressed="false">Асуудалтай</button>
+              <button type="button" data-f="moving" aria-pressed="false">Явж байна</button>
+              <button type="button" data-f="idle" aria-pressed="false">Асаалттай</button>
+              <button type="button" data-f="parked" aria-pressed="false">Зогсоолд</button>
+              <button type="button" data-f="offline" aria-pressed="false">Холбогдоогүй</button>
+            </div>
           </div>
-          <label class="chk map-chk"><input type="checkbox" id="map-names"> Нэр</label>
-          <button type="button" class="btn small" id="map-fit"><svg class="ic"><use href="#i-expand"/></svg>Бүгдийг харуулах</button>
+          <div class="map-list-head"><span id="map-count" class="muted small"></span><label class="chk small"><input type="checkbox" id="map-names"> Нэр харуулах</label></div>
+          <div class="map-list" id="map-list" role="listbox" aria-label="Машинууд"></div>
+        </aside>
+        <div class="map-wrap">
+          <div id="map" class="map"></div>
+          <div class="map-tools">
+            <button type="button" class="btn small" id="map-fit"><svg class="ic"><use href="#i-expand"/></svg>Бүгдийг харуулах</button>
+          </div>
+          <div class="map-legend" aria-label="Тайлбар">
+            <span><i class="mk-dot moving"></i>Явж байна</span>
+            <span><i class="mk-dot idle"></i>Асаалттай зогссон</span>
+            <span><i class="mk-dot parked"></i>Зогсоолд</span>
+            <span><i class="mk-dot offline"></i>Холбогдоогүй</span>
+            <span><i class="mk-dot ring-critical"></i>Ноцтой</span>
+            <span><i class="mk-dot ring-warning"></i>Сэрэмжлүүлэг</span>
+          </div>
+          <div class="map-error" id="map-error" hidden></div>
         </div>
-        <div class="map-legend" aria-label="Тайлбар">
-          <span><i class="mk-dot moving"></i>Явж байна</span>
-          <span><i class="mk-dot idle"></i>Асаалттай зогссон</span>
-          <span><i class="mk-dot parked"></i>Зогсоолд</span>
-          <span><i class="mk-dot offline"></i>Холбогдоогүй</span>
-          <span><i class="mk-dot ring-critical"></i>Ноцтой анхааруулга</span>
-          <span><i class="mk-dot ring-warning"></i>Сэрэмжлүүлэг</span>
-        </div>
-        <div class="map-error" id="map-error" hidden></div>
       </div>
     </section>
 

@@ -105,7 +105,7 @@ const S = {
   es: null,
   sseDropped: false,
   fleet: savedFleetFilters(),
-  map: { filter: loadView('mapFilter', 'all'), names: loadPref('mapNames', false) },
+  map: { filter: loadView('mapFilter', 'all'), group: loadView('mapGroup', ''), names: loadPref('mapNames', false), q: '', sel: null, active: 0 },
   alerts: {
     list: [], loading: false, error: null, hasMore: false, loaded: false, newIds: new Set(),
     f: savedAlertFilters(),
@@ -140,6 +140,8 @@ const typeLabel = (t) => typeInfo(t).label;
 const shortName = (n) => String(n ?? '').replace(/\s*\/?\s*Түлш(?:ний)?\s+мэдрэгчтэй\s*\/?\s*/giu, ' ').trim();
 const groupKey = (g) => (g === null || g === undefined || g === '' ? '__none' : String(g));
 const groupLabel = (g) => (g === null || g === undefined || g === '' ? 'Бүлэггүй' : String(g));
+const keyLabel = (k) => (k === '__none' ? 'Бүлэггүй' : String(k)); // a group select's value back to its name
+const inGroup = (key) => (v) => !key || groupKey(v.group) === key;
 const vName = (imei, fallback) => S.byImei.get(String(imei))?.shortName || shortName(fallback) || String(imei ?? '');
 const aName = (a) => S.byImei.get(a.imei)?.shortName || a.shortName || shortName(a.name) || a.imei || 'GPS сервер';
 const validLatLng = (v) => isNum(v.lat) && isNum(v.lng) && !(Number(v.lat) === 0 && Number(v.lng) === 0) && Math.abs(v.lat) <= 90 && Math.abs(v.lng) <= 180;
@@ -588,6 +590,7 @@ function setVehicles(list) {
   S.vehiclesLoaded = true;
   renderCounts();
   if (first) populateSelects();
+  else refreshGroupCounts();
   if (S.view === 'fleet') renderFleet();
   if (S.view === 'map') renderMap();
   if (S.view === 'settings' && first && S.settings) renderCalTable();
@@ -867,6 +870,7 @@ function showView(view) {
   document.body.dataset.view = view;
   const tab = $(`.tabs a[data-view="${view}"] span`);
   if (tab) $('#page-title').textContent = tab.textContent;
+  renderPageSub();
   if (view === 'fleet') renderFleet();
   if (view === 'map') { renderMap(); setTimeout(() => mapObj?.invalidateSize(), 50); }
   if (view === 'alerts') { syncAlertControls(); if (!S.alerts.loaded || Date.now() - (S.alerts.loadedAt || 0) > 60e3) loadAlerts(); else renderAlerts(); }
@@ -888,13 +892,15 @@ function populateSelects() {
   for (const g of S.meta.groups || []) groups.set(groupKey(g), groupLabel(g));
   for (const v of S.vehicles) groups.set(groupKey(v.group), groupLabel(v.group));
   const gOpts = [...groups.entries()].sort((a, b) => (a[0] === '__none') - (b[0] === '__none') || a[1].localeCompare(b[1]));
-  for (const id of ['#f-group', '#r-group']) {
+  const n = groupCounts();
+  for (const id of ['#f-group', '#r-group', '#m-group']) {
     const sel = $(id);
-    const cur = sel.value || (id === '#f-group' ? S.fleet.group : '');
-    setHTML(sel, html`<option value="">Бүх бүлэг</option>${gOpts.map(([k, l]) => html`<option value="${k}">${l}</option>`)}`);
+    const cur = sel.value || (id === '#f-group' ? S.fleet.group : id === '#m-group' ? S.map.group : '');
+    setHTML(sel, html`<option value="">${groupOptText('', n)}</option>${gOpts.map(([k]) => html`<option value="${k}">${groupOptText(k, n)}</option>`)}`);
     sel.value = gOpts.some(([k]) => k === cur) ? cur : '';
   }
   S.fleet.group = $('#f-group').value;
+  S.map.group = $('#m-group').value;
   const typeSel = $('#a-type');
   const types = Object.entries(S.meta.alertTypes).sort((a, b) => SEVS.indexOf(a[1].severity) - SEVS.indexOf(b[1].severity) || a[1].label.localeCompare(b[1].label));
   setHTML(typeSel, html`<option value="">Бүх төрөл</option>${types.map(([k, t]) => html`<option value="${k}">${t.label}</option>`)}`);
@@ -906,6 +912,31 @@ function populateSelects() {
   setHTML(vehSel, html`<option value="">Бүх машин</option>${vs.map((v) => html`<option value="${v.imei}">${vehicleOptionLabel(v, dupes)}</option>`)}`);
   syncAlertControls();
   if (S.evidence.f) syncEvControls();
+}
+
+/** How many trucks each group has (by groupKey), shown in every group select: "Hangi Urt (34)". */
+function groupCounts() {
+  const n = new Map();
+  for (const v of S.vehicles) n.set(groupKey(v.group), (n.get(groupKey(v.group)) || 0) + 1);
+  return n;
+}
+function groupOptText(k, n) {
+  return k ? `${keyLabel(k)} (${fmtNum(n.get(k) || 0)})` : `Бүх бүлэг (${fmtNum(S.vehicles.length)})`;
+}
+/** Keep the counts in the group selects current when the truck list is refreshed. */
+function refreshGroupCounts() {
+  const n = groupCounts();
+  for (const id of ['#f-group', '#r-group', '#m-group', '#e-group']) {
+    for (const o of $(id).options) o.textContent = groupOptText(o.value, n);
+  }
+}
+/** The line next to the page title: the chosen group and how many trucks it has. */
+function renderPageSub() {
+  const el = $('#page-sub');
+  const key = S.view === 'fleet' ? S.fleet.group : S.view === 'map' ? S.map.group : S.view === 'report' ? $('#r-group').value : null;
+  if (key === null || !S.vehiclesLoaded) { el.textContent = ''; return; }
+  const n = S.vehicles.filter(inGroup(key)).length;
+  setHTML(el, key ? html`<b>${keyLabel(key)}</b> бүлэг · ${fmtNum(n)} машин` : html`Бүх бүлэг · ${fmtNum(n)} машин`);
 }
 
 // ---------------------------------------------------------------- FLEET view
@@ -937,7 +968,8 @@ function fleetFiltered() {
 }
 function renderFleetTiles() {
   const c = { moving: 0, idle: 0, parked: 0, offline: 0, problems: 0 };
-  for (const v of S.vehicles) {
+  const base = S.vehicles.filter(inGroup(S.fleet.group)); // the numbers follow the chosen group
+  for (const v of base) {
     c[v.status]++;
     if (hasProblem(v)) c.problems++;
   }
@@ -945,46 +977,44 @@ function renderFleetTiles() {
   const tile = (key, label, n, cls, pressed, hint) => html`<button type="button" class="tile ${cls}" data-tile="${key}" aria-pressed="${pressed ? 'true' : 'false'}" title="${hint}">
       <span class="t-num">${fmtNum(n)}</span><span class="t-lab">${label}</span></button>`;
   setHTML($('#fleet-tiles'), html`
-    ${tile('all', 'Машин', S.vehicles.length, 't-all', !f.status && !f.equip && !f.problems, 'Бүх машиныг харуулах')}
+    ${tile('all', f.group ? keyLabel(f.group) : 'Бүх машин', base.length, 't-all', !f.status && !f.equip && !f.problems, f.group ? 'Энэ бүлгийн бүх машиныг харуулах' : 'Бүх машиныг харуулах')}
     ${tile('problems', 'Анхаарах', c.problems, c.problems ? 't-problems hot' : 't-problems', f.problems, 'Танилцаагүй ноцтой/сэрэмжлүүлэг анхааруулгатай эсвэл түлшний мэдрэгч нь гэмтэлтэй машин')}
     ${tile('moving', 'Явж байна', c.moving, 'st-moving', f.status === 'moving', 'Одоо явж байгаа')}
     ${tile('idle', 'Асаалттай зогссон', c.idle, 'st-idle', f.status === 'idle', 'Хөдөлгүүр ажиллаж байгаа ч хөдлөхгүй')}
     ${tile('parked', 'Зогсоолд', c.parked, 'st-parked', f.status === 'parked', 'Хөдөлгүүр унтраастай')}
     ${tile('offline', 'Холбогдоогүй', c.offline, 'st-offline', f.status === 'offline', 'Мэдээлэл ирэхгүй байна')}
   `);
-  renderFleetEquip();
+  renderFleetEquip(base);
 }
 /** Equipment: how many GPS trackers and fuel sensors work, are broken (and why) or could not be
  *  checked. Each number filters the list below. */
-function renderFleetEquip() {
+function renderFleetEquip(base = S.vehicles) {
   const n = Object.fromEntries(Object.keys(EQUIP_FILTER).map((k) => [k, 0]));
   const gpsWhy = new Map();
   const fuelWhy = new Map();
   const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
-  for (const v of S.vehicles) {
+  for (const v of base) {
     for (const [k, e] of Object.entries(EQUIP_FILTER)) if (e.pass(v)) n[k]++;
     if (v.gpsFault) bump(gpsWhy, GPS_WHY[v.gpsFault.code] || 'Ажиллахгүй');
     if (fuelEquip(v) === 'bad') bump(fuelWhy, v.fuel?.fault?.short || 'Дохиогүй');
   }
   const on = S.fleet.equip;
-  const num = (key, tone, hint) => (n[key]
-    ? html`<button type="button" class="eq-n ${tone}" data-equip="${key}" aria-pressed="${on === key ? 'true' : 'false'}" title="${hint}">${fmtNum(n[key])}</button>`
-    : html`<span class="eq-n zero">0</span>`);
-  const why = (m) => (m.size ? html`<div class="eq-why">${[...m].sort((a, b) => b[1] - a[1]).map(([k, c]) => html`<span>${k}: <b>${fmtNum(c)}</b></span>`)}</div>` : '');
-  const cap = (t) => html`<span class="eq-cap">${t}</span>`; // the column's name on phones, where the header row is hidden
-  setHTML($('#fleet-equip-body'), html`<table class="eq-tbl">
-    <thead><tr><th></th><th>Ажиллаж байна</th><th>Гэмтэлтэй</th><th title="Трекер мэдээлэл илгээхгүй тул мэдрэгчийг харах боломжгүй, эсвэл машин тогтвортой заалт авах хангалттай удаан зогсоогүй">Шалгагдаагүй</th><th>Суулгаагүй</th></tr></thead>
-    <tbody>
-      <tr><th scope="row">GPS трекер</th>
-        <td>${cap('Ажиллаж байна')}${num('gps-ok', 'good', 'GPS трекер нь ажиллаж байгаа машинууд')}</td>
-        <td class="eq-bad">${cap('Ажиллахгүй')}${num('gps-bad', 'bad', 'GPS трекер ажиллахгүй: 6 цаг ба түүнээс удаан мэдээлэлгүй, байршилгүй мэдээлдэг, эсвэл машины тэжээлгүй явж байгаа')}${why(gpsWhy)}</td>
-        <td class="na">—</td><td class="na">—</td></tr>
-      <tr><th scope="row">Түлшний мэдрэгч</th>
-        <td>${cap('Ажиллаж байна')}${num('fuel-ok', 'good', 'Түлшний мэдрэгч нь түвшин зөв заадаг машинууд')}</td>
-        <td class="eq-bad">${cap('Гэмтэлтэй')}${num('fuel-bad', 'bad', 'Түлшний мэдрэгч гэмтэлтэй: дохиогүй, заалт нь хөдлөхгүй, 10 В-д гацсан, эсвэл савнаас их заадаг')}${why(fuelWhy)}</td>
-        <td>${cap('Шалгагдаагүй')}${num('fuel-unchecked', 'warn', 'Трекер мэдээлэл илгээхгүй, эсвэл тогтвортой заалт хараахан алга')}</td>
-        <td>${cap('Суулгаагүй')}${num('fuel-none', 'mute', 'Түлшний мэдрэгч суулгаагүй машинууд')}</td></tr>
-    </tbody></table>`);
+  const item = (key, tone, label, hint) => (n[key]
+    ? html`<button type="button" class="eq-item ${tone}" data-equip="${key}" aria-pressed="${on === key ? 'true' : 'false'}" title="${hint}"><b>${fmtNum(n[key])}</b> ${label}</button>`
+    : html`<span class="eq-item zero"><b>0</b> ${label}</span>`);
+  const why = (m) => (m.size ? html`<span class="eq-why">${[...m].sort((a, b) => b[1] - a[1]).map(([k, c]) => html`<span>${k}: <b>${fmtNum(c)}</b></span>`)}</span>` : '');
+  setHTML($('#fleet-equip-body'), html`<div class="eq-rows">
+    <div class="eq-row"><span class="eq-name">GPS трекер</span>
+      ${item('gps-ok', 'good', 'ажиллаж байна', 'GPS трекер нь ажиллаж байгаа машинууд')}
+      ${item('gps-bad', 'bad', 'ажиллахгүй', 'GPS трекер ажиллахгүй: 6 цаг ба түүнээс удаан мэдээлэлгүй, байршилгүй мэдээлдэг, эсвэл машины тэжээлгүй явж байгаа')}
+      ${why(gpsWhy)}</div>
+    <div class="eq-row"><span class="eq-name">Түлшний мэдрэгч</span>
+      ${item('fuel-ok', 'good', 'ажиллаж байна', 'Түлшний мэдрэгч нь түвшин зөв заадаг машинууд')}
+      ${item('fuel-bad', 'bad', 'гэмтэлтэй', 'Түлшний мэдрэгч гэмтэлтэй: дохиогүй, заалт нь хөдлөхгүй, 10 В-д гацсан, эсвэл савнаас их заадаг')}
+      ${item('fuel-unchecked', 'warn', 'шалгагдаагүй', 'Трекер мэдээлэл илгээхгүй, эсвэл тогтвортой заалт хараахан алга')}
+      ${item('fuel-none', 'mute', 'суулгаагүй', 'Түлшний мэдрэгч суулгаагүй машинууд')}
+      ${why(fuelWhy)}</div>
+  </div>`);
 }
 function renderFleet() {
   renderFleetTiles();
@@ -1008,7 +1038,9 @@ function renderFleet() {
   const list = fleetFiltered();
   const cmp = SORTERS[f.sort] || SORTERS.alerts;
   list.sort((a, b) => cmp(a, b) * f.dir || SORTERS.name(a, b));
-  $('#f-count').textContent = list.length === S.vehicles.length ? `${list.length} машин` : `${S.vehicles.length}-аас ${list.length}`;
+  const total = f.group ? S.vehicles.filter(inGroup(f.group)).length : S.vehicles.length;
+  $('#f-count').textContent = list.length === total ? `${fmtNum(total)} машин` : `${fmtNum(total)}-аас ${fmtNum(list.length)}`;
+  renderPageSub();
   if (!list.length) {
     body.innerHTML = '';
     empty.hidden = false;
@@ -1057,12 +1089,15 @@ function mapFilterPass(v) {
   if (f === 'problems') return hasProblem(v);
   return v.status === f;
 }
+const mapGroupPass = (v) => inGroup(S.map.group)(v);
 const sevZ = (v) => (topSev(v) === 'critical' ? 2000 : topSev(v) === 'warning' ? 1000 : v.status === 'offline' ? -500 : 0);
-function markerKey(v) { return [v.status, topSev(v) || '', Math.round((v.angle || 0) / 10)].join('|'); }
+const isSel = (v) => S.map.sel === v.imei;
+function markerKey(v) { return [v.status, topSev(v) || '', Math.round((v.angle || 0) / 10), isSel(v) ? 's' : ''].join('|'); }
 function markerIcon(v) {
   const sev = topSev(v);
   const arrow = v.status === 'moving' ? `<svg class="mk-arrow" viewBox="0 0 24 24" style="transform:rotate(${Math.round(v.angle || 0)}deg)"><path d="M12 2.5l5.5 13-5.5-3.2-5.5 3.2z"/></svg>` : '';
-  return L.divIcon({ className: 'mk-wrap', html: `<div class="mk st-${v.status}${sev ? ' ring-' + sev : ''}">${arrow}</div>`, iconSize: [22, 22], iconAnchor: [11, 11], popupAnchor: [0, -10], tooltipAnchor: [10, 0] });
+  const sz = isSel(v) ? 30 : 20;
+  return L.divIcon({ className: 'mk-wrap', html: `<div class="mk st-${v.status}${sev ? ' ring-' + sev : ''}${isSel(v) ? ' sel' : ''}">${arrow}</div>`, iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2], popupAnchor: [0, -sz / 2], tooltipAnchor: [sz / 2, 0] });
 }
 function popupHtml(v) {
   if (!v) return '';
@@ -1076,29 +1111,33 @@ function popupHtml(v) {
   </div>`.s;
 }
 function renderMap() {
+  renderMapList();
+  renderPageSub();
   if (!ensureMap()) return;
   const shown = new Set();
   for (const v of S.vehicles) {
-    if (!validLatLng(v) || !mapFilterPass(v)) continue;
+    if (!validLatLng(v) || ((!mapFilterPass(v) || !mapGroupPass(v)) && !isSel(v))) continue;
     shown.add(v.imei);
     let m = markers.get(v.imei);
     const key = markerKey(v);
+    const z = isSel(v) ? 5000 : sevZ(v);
     if (!m) {
       const imei = v.imei;
-      m = L.marker([v.lat, v.lng], { icon: markerIcon(v), title: v.shortName, alt: v.shortName, riseOnHover: true, zIndexOffset: sevZ(v) });
+      m = L.marker([v.lat, v.lng], { icon: markerIcon(v), title: v.shortName, alt: v.shortName, riseOnHover: true, zIndexOffset: z });
       m.bindPopup(() => popupHtml(S.byImei.get(imei)), { maxWidth: 300, minWidth: 230 });
+      m.on('click', () => { if (S.map.sel !== imei) selectOnMap(imei, false); });
       m._key = key;
       m.addTo(mapObj);
       markers.set(v.imei, m);
     } else {
       m.setLatLng([v.lat, v.lng]);
       if (m._key !== key) { m.setIcon(markerIcon(v)); m._key = key; }
-      m.setZIndexOffset(sevZ(v));
+      m.setZIndexOffset(z);
       if (m.isPopupOpen()) m.getPopup().update();
     }
-    if (S.map.names) {
-      if (!m.getTooltip()) m.bindTooltip(esc(v.shortName), { permanent: true, direction: 'right', className: 'mk-label' });
-    } else if (m.getTooltip()) m.unbindTooltip();
+    const label = S.map.names || isSel(v);
+    if (label && !m.getTooltip()) m.bindTooltip(esc(v.shortName), { permanent: true, direction: 'right', className: 'mk-label' });
+    else if (!label && m.getTooltip()) m.unbindTooltip();
   }
   for (const [imei, m] of markers) if (!shown.has(imei)) { m.remove(); markers.delete(imei); }
   if (!mapFitted && S.vehiclesLoaded) { fitMap(); mapFitted = true; }
@@ -1111,6 +1150,72 @@ function fitMap() {
   if (!pts.length) return;
   if (pts.length === 1) mapObj.setView(pts[0], 12);
   else mapObj.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 12 });
+}
+/** Search text and a truck's searchable text, both without spaces or dashes, so "3214 уеу",
+ *  "3214УЕУ" and "3214-УЕУ" find the same truck. */
+const squash = (t) => String(t || '').toLowerCase().replace(/[\s\-_.]+/g, '');
+/** The trucks listed beside the map: the chosen group and status, narrowed by the search text.
+ *  While searching, plates that start with the text come first. */
+function mapListed() {
+  const q = squash(S.map.q);
+  let list = S.vehicles.filter((v) => mapGroupPass(v) && mapFilterPass(v));
+  if (q) {
+    list = list.filter((v) => squash(v._search).includes(q));
+    const starts = (v) => (squash(v.shortName).startsWith(q) || squash(v.plate).startsWith(q) ? 0 : 1);
+    list.sort((a, b) => starts(a) - starts(b) || SORTERS.name(a, b));
+  } else {
+    list.sort((a, b) => problemScore(b) - problemScore(a) || STATUS[a.status].order - STATUS[b.status].order || SORTERS.name(a, b));
+  }
+  return list;
+}
+const MAP_LIST_MAX = 300;
+function renderMapList() {
+  const box = $('#map-list');
+  const all = mapListed();
+  const list = all.slice(0, MAP_LIST_MAX);
+  S.map.active = clamp(S.map.active, 0, Math.max(0, list.length - 1));
+  const q = S.map.q.trim();
+  $('#map-count').textContent = S.vehiclesLoaded ? (q ? `“${q}”: ${fmtNum(all.length)} машин олдлоо` : `${fmtNum(all.length)} машин`) : 'Ачаалж байна…';
+  if (S.vehiclesLoaded && !all.length) {
+    setHTML(box, html`<div class="ml-empty">${q ? html`<b>“${q}” олдсонгүй</b><span>Улсын дугаарын тоог бичээд үзнэ үү. Бүлэг, төлөвийн шүүлтүүрийг “Бүгд” болгоно уу.</span>` : html`<b>Энэ шүүлтүүрт машин алга</b>`}</div>`);
+    return;
+  }
+  setHTML(box, html`${list.map((v, i) => {
+    const sev = topSev(v);
+    const pct = v.hasFuel ? fuelPct(v) : null;
+    const where = validLatLng(v);
+    const sub = v.status === 'moving' && v.speed !== null ? `${fmtNum(v.speed)} км/ц` : STATUS[v.status].label;
+    return html`<button type="button" class="ml-row${isSel(v) ? ' sel' : ''}${q && i === S.map.active ? ' active' : ''}${where ? '' : ' nopos'}" role="option" aria-selected="${isSel(v) ? 'true' : 'false'}" data-locate="${v.imei}" title="${where ? 'Газрын зураг дээр харуулах' : 'Байршил ирээгүй'}">
+      <i class="ml-dot st-${v.status}${sev ? ' ring-' + sev : ''}" aria-hidden="true"></i>
+      <span class="ml-main"><b>${v.shortName}</b><small>${groupLabel(v.group)} · ${where ? sub : 'байршилгүй'}</small></span>
+      <span class="ml-side">${pct !== null ? html`<span class="ml-fuel${pct < 15 ? ' low' : ''}">${fmtNum(clamp(pct, 0, 100))}%</span>` : ''}${sev ? html`<span class="badges">${alertBadges(v.activeAlerts, v.muted)}</span>` : ''}</span>
+    </button>`;
+  })}${all.length > list.length ? html`<div class="ml-more muted small">Эхний ${fmtNum(MAP_LIST_MAX)}-г харуулж байна. Хайлтаа нарийсгана уу.</div>` : ''}`);
+}
+/** Show one truck on the map: fly to it, ring it and open its card. A filter that hides it is
+ *  cleared first so the truck the user asked for is always on the map. */
+function selectOnMap(imei, fly = true) {
+  const v = S.byImei.get(String(imei));
+  if (!v) return;
+  if (!validLatLng(v)) {
+    toast({ sev: 'warning', title: `${v.shortName}: байршил алга`, body: 'Энэ машины GPS трекер байршил илгээгээгүй байна.' });
+    return;
+  }
+  if (!mapFilterPass(v) || !mapGroupPass(v)) {
+    S.map.filter = 'all';
+    if (!mapGroupPass(v)) { S.map.group = ''; $('#m-group').value = ''; saveView('mapGroup', ''); }
+    saveView('mapFilter', 'all');
+    renderPageSub();
+  }
+  S.map.sel = v.imei;
+  renderMap();
+  const m = markers.get(v.imei);
+  if (m && fly) {
+    mapObj.flyTo(m.getLatLng(), Math.max(mapObj.getZoom(), 13), { duration: 0.6 });
+    mapObj.once('moveend', () => { if (S.map.sel === v.imei) m.openPopup(); });
+  }
+  const row = $(`#map-list [data-locate="${v.imei}"]`);
+  if (row) row.scrollIntoView({ block: 'nearest' });
 }
 
 // ---------------------------------------------------------------- ALERTS view
@@ -1877,6 +1982,7 @@ async function openExcelFolder(btn) {
 }
 function renderReport() {
   renderExcelBar();
+  renderPageSub();
   const r = S.report;
   $$('#r-period button').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.h) === r.hours)));
   $$('.report-tbl th').forEach((th) => {
@@ -2580,6 +2686,44 @@ function bindStatic() {
     S.map.filter = b.dataset.f;
     saveView('mapFilter', S.map.filter);
     renderMap();
+  });
+  $('#m-group').addEventListener('change', (e) => {
+    S.map.group = e.target.value;
+    saveView('mapGroup', S.map.group);
+    mapFitted = false; // show the whole chosen group
+    renderMap();
+    renderPageSub();
+  });
+  const mapQ = $('#map-q');
+  const side = $('.map-side');
+  const searching = () => side.classList.toggle('searching', document.activeElement === mapQ); // phones: the list opens over the map only while typing
+  mapQ.addEventListener('input', debounce(() => { S.map.q = mapQ.value; S.map.active = 0; renderMapList(); searching(); }, 100));
+  mapQ.addEventListener('focus', searching);
+  mapQ.addEventListener('blur', () => setTimeout(searching, 150));
+  mapQ.addEventListener('keydown', (e) => {
+    const rows = $$('#map-list [data-locate]');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!rows.length) return;
+      S.map.active = clamp(S.map.active + (e.key === 'ArrowDown' ? 1 : -1), 0, rows.length - 1);
+      rows.forEach((r, i) => r.classList.toggle('active', i === S.map.active));
+      rows[S.map.active].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      S.map.q = mapQ.value; // the debounced input may not have run yet
+      renderMapList();
+      const r = $$('#map-list [data-locate]')[S.map.active];
+      if (r) { selectOnMap(r.dataset.locate); if (matchMedia('(max-width: 720px)').matches) mapQ.blur(); }
+    } else if (e.key === 'Escape' && mapQ.value) {
+      e.preventDefault();
+      mapQ.value = ''; S.map.q = ''; renderMapList(); searching();
+    }
+  });
+  $('#map-list').addEventListener('click', (e) => {
+    const r = e.target.closest('[data-locate]');
+    if (!r) return;
+    selectOnMap(r.dataset.locate);
+    if (matchMedia('(max-width: 720px)').matches) mapQ.blur();
   });
   $('#map-names').addEventListener('change', (e) => {
     S.map.names = e.target.checked;
