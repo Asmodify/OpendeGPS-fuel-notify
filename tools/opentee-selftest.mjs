@@ -56,7 +56,14 @@ const row = (o) => ({
 
   const sensor = toOpenTeeEvent(row({ type: 'sensor_lost', severity: 'critical', ongoing: 1 }), CAL);
   check('sensor fault -> FUEL_SENSOR_INVALID, open', sensor?.type === 'FUEL_SENSOR_INVALID' && sensor.status === 'open' && sensor.endedAt === null);
-  check('other alerts are not sent', toOpenTeeEvent(row({ type: 'overspeed' }), CAL) === null);
+  check('overspeed is sent too', toOpenTeeEvent(row({ type: 'overspeed', severity: 'warning' }), CAL)?.type === 'OVERSPEED');
+  check('offline -> GPS_OFFLINE', toOpenTeeEvent(row({ type: 'offline', severity: 'critical', ongoing: 1 }), CAL)?.type === 'GPS_OFFLINE');
+  const mismatch = toOpenTeeEvent(row({ type: 'receipt_mismatch', severity: 'critical', extra: JSON.stringify({ receiptId: 'ot-0b6f1c9e-1111-4222-8333-444455556666', receiptL: 300, missingL: 120.4 }) }), CAL);
+  check('receipt mismatch -> RECEIPT_MISMATCH with the Open Tee receipt id and the missing litres',
+    mismatch?.type === 'RECEIPT_MISMATCH' && mismatch.receiptId === '0b6f1c9e-1111-4222-8333-444455556666' && mismatch.deltaLiters === -120.4, mismatch);
+  const ownReceipt = toOpenTeeEvent(row({ type: 'receipt_mismatch', extra: JSON.stringify({ receiptId: 'r-12', receiptL: 200 }) }), CAL);
+  check('a receipt typed into the warner itself has no Open Tee id', ownReceipt?.receiptId === null && ownReceipt.deltaLiters === -200, ownReceipt);
+  check('unknown alert types are not sent', toOpenTeeEvent(row({ type: 'test' }), CAL) === null);
   check('no litres without a calibration', toOpenTeeEvent(row({ type: 'refuel', amount_mv: 4000 }), null)?.deltaLiters === null);
 }
 
@@ -95,9 +102,9 @@ try {
   insert({ type: 'overspeed', t: T + 999 * 60000 }, T + 300);
 
   await link.sync();
-  check('sends in batches of 200', calls.length === 2 && calls[0].events.length === 200 && calls[1].events.length === 50, calls.map((c) => c.events.length));
+  check('sends in batches of 200', calls.length === 2 && calls[0].events.length === 200 && calls[1].events.length === 51, calls.map((c) => c.events.length));
   check('uses the key and the events path', calls[0].auth === `Bearer ${KEY}` && calls[0].url === 'http://api.test/api/v1/integrations/fuel-warner/events');
-  check('overspeed is not sent', calls.every((c) => c.events.every((e) => e.type === 'REFUEL')));
+  check('overspeed goes too', calls[1].events.at(-1)?.type === 'OVERSPEED');
   check('no error', link.status.lastError === null, link.status.lastError);
 
   calls.length = 0;
