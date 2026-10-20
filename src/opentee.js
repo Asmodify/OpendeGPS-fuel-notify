@@ -1,5 +1,6 @@
-// Link to Open Tee (our fleet app and admin web): refuels, fuel drains, low fuel and fuel sensor
-// faults are sent to the Open Tee API (POST /api/v1/integrations/fuel-warner/events), which
+// Link to Open Tee (our fleet app and admin web): every alert (refuels, fuel drains, low fuel,
+// sensor and tracker faults, GPS offline, driving after hours, receipt mismatches...) is sent to
+// the Open Tee API (POST /api/v1/integrations/fuel-warner/events), which
 // stores them next to its own fuel events. The admin web lists them (staff can mark a drain
 // confirmed / false alarm there) and the driver app shows them on the vehicle's fuel card.
 //
@@ -38,12 +39,22 @@ const NO_TRACKER_KEY = 'opentee.receiptsNoTracker'; // receipts for vehicles wit
 // the day it was uploaded or the day before (from 18 h before the upload)
 const UPLOAD_LATE_MS = 18 * 3600 * 1000;
 
-/** Warner alert type -> Open Tee fuel event type. Other alert types are not sent. */
+/** Warner alert type -> Open Tee fuel event type. Every alert type the warner raises is sent. */
 const TYPE_MAP = {
   refuel: 'REFUEL',
   fuel_drain: 'POSSIBLE_DRAIN',
   low_fuel: 'LOW_FUEL',
   sensor_lost: 'FUEL_SENSOR_INVALID',
+  sensor_restored: 'FUEL_SENSOR_RESTORED',
+  power_cut: 'TRACKER_POWER_CUT',
+  power_restored: 'TRACKER_POWER_RESTORED',
+  offline: 'GPS_OFFLINE',
+  back_online: 'GPS_BACK_ONLINE',
+  server_event: 'GPS_SERVER_EVENT',
+  after_hours: 'AFTER_HOURS',
+  long_idle: 'LONG_IDLE',
+  overspeed: 'OVERSPEED',
+  receipt_mismatch: 'RECEIPT_MISMATCH',
 };
 export const OPENTEE_TYPES = Object.keys(TYPE_MAP);
 
@@ -100,6 +111,14 @@ export function toOpenTeeEvent(row, cal) {
   let beforeL = litres(beforeMv, cal);
   let afterL = litres(afterMv, cal);
   if (beforeL === null || afterL === null || deltaL === null || Math.abs(afterL - beforeL - deltaL) > 1) beforeL = afterL = null;
+  // a receipt that did not reach the tank: the litres missing, and the Open Tee receipt it is about
+  let receiptId = null;
+  if (row.type === 'receipt_mismatch') {
+    const missing = num(x.missingL) ?? num(x.receiptL);
+    deltaL = missing === null ? null : round(-missing, 1);
+    const id = String(x.receiptId || '');
+    receiptId = id.startsWith('ot-') ? id.slice(3) : null;
+  }
   const title = mnTitle(row.title || '');
   const detail = mnDetail(row.detail || '');
   return {
@@ -125,6 +144,7 @@ export function toOpenTeeEvent(row, cal) {
     history: !!row.historical,
     verdict: row.verdict === 'confirmed' || row.verdict === 'false_alarm' ? row.verdict : null,
     note: row.note ?? '',
+    receiptId,
   };
 }
 
