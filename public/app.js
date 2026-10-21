@@ -113,7 +113,7 @@ const S = {
   },
   report: { hours: 24, rows: null, loading: false, error: null, sort: 'used', dir: -1, loadedAt: 0 },
   evidence: { f: null, list: [], off: new Set(), loading: false, loaded: false, loadedAt: 0, error: null, limited: false }, // f: evDefaults() once the clock skew is known
-  receipts: { data: null, loading: false, error: null, loadedAt: 0, filter: loadView('receiptsFilter', 'problems') },
+  receipts: { data: null, loading: false, error: null, loadedAt: 0, filter: loadView('receiptsFilter', 'problems'), showAll: false },
   seen: new Set(),
   prefs: { sound: loadPref('sound', true), bsev: loadPref('bsev', ['critical', 'warning']), theme: loadPref('theme', 'auto') },
   detail: null,
@@ -1713,6 +1713,8 @@ function evFilterChanged(reload) {
 }
 
 // ---------------------------------------------------------------- REPORT view
+const STUCK_L_PER_100 = 15;
+const PERIOD_LABEL = { 24: 'Сүүлийн 24 цаг', 168: 'Сүүлийн 7 хоног', 720: 'Сүүлийн 30 хоног', 1440: 'Сүүлийн 60 хоног' };
 function normSummary(x) {
   const imei = String(x.imei);
   const v = S.byImei.get(imei);
@@ -1726,6 +1728,9 @@ function normSummary(x) {
   // "fuel used" only covers the driving between the first and last steady parked reading
   const partial = hasFuel && usedMv !== null && (dist ?? 0) > 20 && (fuelKm ?? 0) < 0.8 * dist;
   const noUse = partial && (fuelKm ?? 0) < 10;
+  // a loaded truck cannot drive 100 km on less than STUCK_L_PER_100: the sensor is stuck (flat
+  // or zero reading) or a refuel was under-measured, so the figure is not counted
+  const stuck = hasFuel && !partial && isNum(usedL) && (fuelKm ?? 0) >= 100 && (usedL / fuelKm) * 100 < STUCK_L_PER_100;
   // % of tank on the same basis as the litres shown (tank table), else linear
   const pctOf = (L, mv) => (isNum(L) && cal.tankLiters ? (Number(L) / cal.tankLiters) * 100 : dMvToPct(mv, cal));
   const refuelL = n('refuelL') ?? dMvToL(n('refuelMv'), cal);
@@ -1741,24 +1746,27 @@ function normSummary(x) {
   return {
     imei, name: x.name ?? v?.name ?? '', shortName: x.shortName || v?.shortName || shortName(x.name) || imei,
     group: x.group !== undefined ? x.group : v?.group, hasFuel, cal,
-    distanceKm: dist, engineHours: n('engineHours'), fuelKm, partial, noUse,
+    distanceKm: dist, engineHours: n('engineHours'), fuelKm, partial, noUse, stuck,
     usedMv, usedL, usedPct: pctOf(usedL, usedMv),
     refuelMv: n('refuelMv'), refuelL, refuelPct: pctOf(refuelL, n('refuelMv')),
     drainMv: n('drainMv'), drainL, drainPct: pctOf(drainL, n('drainMv')),
     // litres per 100 km over the distance the fuel figure actually covers (between the first
     // and last steady parked reading), not the whole period
-    rate: (() => { const km = fuelKm ?? dist; return usedL !== null && km >= 10 ? (usedL / km) * 100 : null; })(),
+    rate: (() => { const km = fuelKm ?? dist; return usedL !== null && km >= 10 && !stuck ? (usedL / km) * 100 : null; })(),
     counts, crit, warn, total,
     _search: [x.shortName, x.name, imei, x.group].filter(Boolean).join(' ').toLowerCase(),
   };
 }
-async function loadReport() {
+async function loadReport(fresh = false) {
   const r = S.report;
+  const hours = r.hours;
   r.loading = true;
   renderReport();
   try {
-    const data = await api(`/api/summary?hours=${r.hours}`);
+    const data = await api(`/api/summary?hours=${hours}${fresh ? '&fresh=1' : ''}`, { timeout: 90000 });
+    if (hours !== r.hours) return; // another period was picked meanwhile; its own load renders
     r.rows = (Array.isArray(data) ? data : []).map(normSummary);
+    r.rowsHours = hours;
     r.error = null;
     r.loadedAt = Date.now();
     markServer(true);
@@ -1803,6 +1811,7 @@ function amountCell(mv, L, pct, cls = '', prefix = '') {
 function usedCell(x) {
   if (!x.hasFuel) return html`<span class="muted">мэдрэгчгүй</span>`;
   if (x.noUse) return html`<span class="muted" title="Энэ зайд зарцуулсан түлшийг хэмжих хангалттай тогтвортой зогсоолын заалт алга">—</span>`;
+  if (x.stuck) return html`<span class="stuck" title="${fmtNum(x.fuelKm)} км-т ${fmtNum(x.usedL)} л — 100 км-т ${STUCK_L_PER_100} л-ээс бага гарах боломжгүй. Түлшний мэдрэгч нэг заалт дээр гацсан эсвэл цэнэглэлт дутуу хэмжигдсэн байж магадгүй. Нийт дүнд тооцоогүй."><b>шалгах</b><small>${fmtNum(x.usedL)} л</small></span>`;
   const cell = amountCell(x.usedMv, x.usedL, x.usedPct, '', x.partial ? '≥ ' : '');
   return x.partial ? html`<span title="${fmtNum(x.distanceKm)} км-ээс ${fmtNum(x.fuelKm ?? 0)} км-ийг хамарна (эхний ба сүүлийн тогтвортой зогсоолын заалтын хооронд)">${cell}</span>` : cell;
 }
@@ -1875,6 +1884,8 @@ const RC_STATUS = {
   nodata: { label: 'Тэр үед мэдээлэлгүй', cls: '' },
   nosensor: { label: 'Түлшний мэдрэгчгүй', cls: '' },
 };
+// the Report page shows the newest few receipts until "show all" (the truck table is below)
+const RC_SHORT = 8;
 const rcProblem = (r) => r.status === 'short' || r.status === 'norefuel';
 const rcLocalMs = (r) => Date.parse(`${r.date}T${r.time || '12:00'}:00Z`) - (S.meta.tzOffsetMinutes ?? 480) * 60e3;
 async function loadReceipts() {
@@ -1921,7 +1932,7 @@ function renderReceipts() {
   const L = (x) => (isNum(x) ? `${fmtNum(x)} л` : '—');
   setHTML(listEl, html`<div class="table-scroll"><table class="tbl rc-tbl"><thead><tr>
       <th>Огноо</th><th>Машин</th><th class="num">Баримт</th><th class="num">Савд орсон</th><th class="num">Дутуу</th><th>Үр дүн</th><th class="rc-x"><span class="sr-only">Устгах</span></th>
-    </tr></thead><tbody>${rows.slice(0, 300).map((r) => {
+    </tr></thead><tbody>${rows.slice(0, rc.showAll ? 300 : RC_SHORT).map((r) => {
       const st = RC_STATUS[r.status] || { label: r.status, cls: '' };
       const miss = r.status === 'short' ? r.missing : r.status === 'norefuel' ? r.litres : null;
       const at = r.refuel ? r.refuel.fromT : rcLocalMs(r);
@@ -1935,7 +1946,11 @@ function renderReceipts() {
         <td><span class="chip ${st.cls}">${st.label}</span>${r.nofit ? html` <span class="chip sev-critical" title="Баримт нь цэнэглэхийн өмнөх савны сул зайнаас их">савд багтахгүй</span>` : ''}</td>
         <td class="rc-x"><button type="button" class="btn small js-rc-del" data-id="${r.id}" title="Энэ баримтыг устгах" aria-label="Энэ баримтыг устгах">${icon('x')}</button></td>
       </tr>`;
-    })}</tbody></table></div>${rows.length > 300 ? html`<p class="help">${rows.length}-аас 300-г харуулж байна. Excel түлшний бүртгэлийн “Баримт” хуудсанд бүгд бий.</p>` : ''}`);
+    })}</tbody></table></div>${!rc.showAll && rows.length > RC_SHORT
+      ? html`<div class="rc-more"><button type="button" class="btn small js-rc-more">Бүгдийг харуулах (${fmtNum(rows.length)})</button></div>`
+      : rc.showAll && rows.length > RC_SHORT
+        ? html`<div class="rc-more">${rows.length > 300 ? html`<span class="help">${rows.length}-аас 300-г харуулж байна. Excel түлшний бүртгэлийн “Баримт” хуудсанд бүгд бий.</span>` : ''}<button type="button" class="btn small js-rc-more">Хураах</button></div>`
+        : ''}`);
 }
 async function importReceipts(btn) {
   const text = $('#r-rc-text').value;
@@ -1991,6 +2006,11 @@ function renderReport() {
   });
   const body = $('#r-body'), empty = $('#r-empty'), tiles = $('#r-tiles');
   document.querySelector('.report-tbl').classList.toggle('is-loading', r.loading && !!r.rows);
+  tiles.classList.toggle('is-loading', r.loading && !!r.rows);
+  // a month of tracker messages takes several seconds: say so instead of showing the old period
+  const busy = $('#r-loading');
+  busy.hidden = !(r.loading && r.rows);
+  if (!busy.hidden) setHTML(busy, html`<span class="spinner"></span>Тайлан бэлтгэж байна (${(PERIOD_LABEL[r.hours] || `сүүлийн ${r.hours} цаг`).toLowerCase()})…${r.hours > 24 ? ' Урт хугацааг тооцоход хэдэн секунд болно.' : ''}`);
   if (!r.rows) {
     body.innerHTML = '';
     tiles.innerHTML = '';
@@ -2006,7 +2026,7 @@ function renderReport() {
   for (const x of rows) {
     dist += x.distanceKm || 0;
     eng += x.engineHours || 0;
-    if (x.partial) usedPartial++; // incomplete figures are left out of the total
+    if (x.partial || x.stuck) usedPartial++; // incomplete or impossible figures are left out of the total
     else if (x.usedL !== null) { usedL += x.usedL; usedLn++; }
     if (x.refuelMv > 0) { refuelN++; if (x.refuelL !== null) { refuelL += x.refuelL; refuelLn++; } }
     if (x.drainMv > 0) { drainN++; if (x.drainL !== null) { drainL += x.drainL; drainLn++; } }
@@ -2017,9 +2037,9 @@ function renderReport() {
   const tile = (label, value, sub, cls = '') => html`<div class="tile static ${cls}"><span class="t-num">${value}</span><span class="t-lab">${label}</span>${sub ? html`<span class="t-sub">${sub}</span>` : ''}</div>`;
   setHTML(tiles, html`
     ${tile('Туулсан зам', `${fmtNum(dist)} км`, `${active} машин хөдөлсөн`)}
-    ${tile('Хөдөлгүүрийн цаг', fmtNum(eng, 1), '')}
+    ${tile('Хөдөлгүүрийн цаг', `${fmtNum(eng, 1)} ц`, '')}
     ${tile('Зарцуулсан түлш', usedLn ? `${fmtNum(usedL)} л` : '—', usedLn || usedPartial
-      ? `${veh(usedLn)}${usedPartial ? ` — дутуу дүнтэй өөр ${usedPartial} машиныг тооцоогүй` : ''}`
+      ? `${veh(usedLn)}${usedPartial ? ` — дутуу эсвэл шалгах дүнтэй өөр ${usedPartial} машиныг тооцоогүй` : ''}`
       : 'Литрээр харахын тулд Тохиргоонд савны хэмжээг оруулна уу')}
     ${tile('Цэнэглэлт', !refuelN ? '0' : refuelLn === refuelN ? `${fmtNum(refuelL)} л` : veh(refuelN), !refuelN ? '' : refuelLn === refuelN ? veh(refuelN) : refuelLn ? `${fmtNum(refuelL)} л мэдэгдэж байна (${refuelN - refuelLn} машины савны хэмжээ алга)` : 'литрээр харахын тулд савны хэмжээг оруулна уу')}
     ${tile('Сэжигтэй түлшний алдагдал', !drainN ? 'Алга' : drainLn === drainN ? `${fmtNum(drainL)} л` : veh(drainN), !drainN ? 'алдагдлын анхааруулга алга (худал дохио, цуцлагдсан алдагдлыг тооцохгүй)' : drainLn === drainN ? `${veh(drainN)} — худал дохио, цуцлагдсан алдагдлыг тооцохгүй` : drainLn ? `${fmtNum(drainL)} л мэдэгдэж байна — анхааруулгыг шалгана уу` : 'анхааруулгыг шалгана уу', drainN ? 'hot' : 'calm')}
@@ -2062,7 +2082,7 @@ function exportCsv() {
   const lines = [head.map(csvCell).join(',')];
   for (const x of rows) {
     lines.push([x.shortName, x.name, x.imei, groupLabel(x.group), x.hasFuel ? 'тийм' : 'үгүй', f(x.distanceKm), f(x.engineHours, 2), f(x.usedL), f(x.usedPct), f(x.usedMv, 0),
-      f(x.rate), f(x.fuelKm), x.usedMv === null ? '' : x.noUse ? 'үгүй' : x.partial ? 'хэсэгчлэн' : 'тийм',
+      f(x.rate), f(x.fuelKm), x.usedMv === null ? '' : x.noUse ? 'үгүй' : x.partial ? 'хэсэгчлэн' : x.stuck ? 'шалгах' : 'тийм',
       f(x.refuelL), f(x.refuelMv, 0), f(x.drainL), f(x.drainMv, 0), ...types.map((t) => x.counts[t] || 0)].map(csvCell).join(','));
   }
   const d = new Date();
@@ -2840,7 +2860,7 @@ function bindStatic() {
   $('#r-group').addEventListener('change', renderReport);
   $('#r-q').addEventListener('input', debounce(renderReport, 120));
   $('#r-fuel').addEventListener('change', renderReport);
-  $('#r-refresh').addEventListener('click', loadReport);
+  $('#r-refresh').addEventListener('click', () => loadReport(true));
   $('#r-csv').addEventListener('click', exportCsv);
   $('#r-excel-folder').addEventListener('click', (e) => openExcelFolder(e.currentTarget));
   $('#r-xlsx').addEventListener('click', (e) => { e.preventDefault(); downloadExcel(e.currentTarget); });
@@ -2863,6 +2883,7 @@ function bindStatic() {
   $('#r-rc-list').addEventListener('click', (e) => {
     const del = e.target.closest('.js-rc-del');
     if (del) { e.stopPropagation(); deleteReceipt(del.dataset.id); return; }
+    if (e.target.closest('.js-rc-more')) { S.receipts.showAll = !S.receipts.showAll; renderReceipts(); return; }
     const tr = e.target.closest('tr[data-imei]');
     if (tr) openVehicle(tr.dataset.imei, Number(tr.dataset.at));
   });

@@ -8,6 +8,7 @@ import { gpsFault, fuelSensorState, fuelFaultInfo, buildFleetStatusSheets } from
 import { validPos } from './refuelplaces.js';
 import { meterCheck, CONFIRMS, probeFault } from './meter.js';
 import { mnTitle, mnDetail, mnAlertTypes } from './mn.js';
+import { odoStepOk, motionStatsOf, sliceByTime } from './motion.js';
 import {
   RECEIPTS_KEY, RECEIPTS_MAX, MISSING_MIN_L, MISSING_MIN_PCT, parseReceiptText, receiptId, refuelsFromRows, matchReceipts, receiptTotals, localMs,
 } from './receipts.js';
@@ -18,6 +19,7 @@ import {
 
 const SEVERITIES = ['critical', 'warning', 'info'];
 const HOUR = 3600e3;
+const SUMMARY_LONG_TTL = 10 * 60e3; // see alertsChangedForSummary
 const MIN = 60e3;
 const DRAIN_CONFIRM_MS = 5 * HOUR; // a fuel drop must stay down this long before it is alerted
 const PENDING_TITLE = 'Possible fuel drop — checking (5 h)';
@@ -982,7 +984,7 @@ export class Engine {
     }
     if (res.inserted) {
       this.stats.alertsCreated++;
-      this.summaryCache.clear();
+      this.alertsChangedForSummary();
       if (LEDGER_TYPES.includes(type)) this.ledger?.touch('new fuel event');
       // a refuel after a drop: the level coming back no longer proves the drop was a misreading
       if (type === 'refuel' && imei) this.markRefuelAfterDrains(imei, fromT ?? t);
@@ -1040,7 +1042,7 @@ export class Engine {
         if (json.length <= 20000) cols.extra = json;
       }
       if (!this.db.updateAlert(row.id, cols)) return;
-      this.summaryCache.clear();
+      this.alertsChangedForSummary();
       if (LEDGER_TYPES.includes(row.type)) this.ledger?.touch('fuel event updated');
       if (broadcast) {
         const updated = this.db.getAlert(row.id);
@@ -1104,7 +1106,7 @@ export class Engine {
           };
         }
         if (!cols || !this.db.updateAlert(row.id, cols)) continue;
-        this.summaryCache.clear();
+        this.alertsChangedForSummary();
         this.ledger?.touch(confirmed ? 'fuel drop confirmed' : 'fuel drop was a misreading');
         const view = this.alertView(this.db.getAlert(row.id));
         log('info', `${confirmed ? 'ALERT [critical]' : 'False alarm (level came back):'} ${view.shortName || row.imei}: ${view.title} - ${view.detail}`);
@@ -1708,6 +1710,13 @@ export class Engine {
     return list;
   }
 
+  /** A new or changed alert (they come in all the time): the 24-hour report is worked out
+   *  again on the next visit, a longer one (several seconds of work over a month of tracker
+   *  messages) is kept until SUMMARY_LONG_TTL; the owner's own changes still clear them all. */
+  alertsChangedForSummary() {
+    for (const h of this.summaryCache.keys()) if (h <= 24) this.summaryCache.delete(h);
+  }
+
   /**
    * GET /api/summary
    * distanceKm  - sum of odometer (io16) increases between consecutive messages, ignoring
@@ -1728,10 +1737,10 @@ export class Engine {
    *               refuelL / drainL are the per-alert litres (tank table) summed, and
    *               alerts.fuel_drain is the number of counted drains.
    */
-  summary(hours) {
+  summary(hours, { fresh = false } = {}) {
     const h = clamp(num(hours) ?? 24, 1, 24 * 90);
     const cached = this.summaryCache.get(h);
-    if (cached && Date.now() - cached.at < 60e3) return cached.data;
+    if (!fresh && cached && Date.now() - cached.at < (h <= 24 ? 60e3 : SUMMARY_LONG_TTL) && Date.now() >= cached.at) return cached.data;
     const to = Date.now();
     const from = to - h * HOUR;
     const sums = new Map();
@@ -1752,26 +1761,33 @@ export class Engine {
       const runV = Number.isFinite(stRunV) ? stRunV - 1000 : Infinity;
       const thr24 = Math.min(26400, runV);
       const thr12 = Math.min(13300, runV);
-      const m = this.db.motionStats(rec.imei, from, to, thr24, thr12);
+      // one read of the tracker messages covers the period and the fuel balance span
+      // (which may start at the last trusted level before the period)
+      const fuelOn = rec.v.hasFuel && this.detState(rec)?.sensorOk !== false;
+      const pts = fuelOn ? (levels.get(rec.imei) || []).map((r) => ({ t: r.t, mv: r.mv })) : [];
+      if (fuelOn) {
+        const before = this.db.lastLevelBefore(rec.imei, from);
+        if (before && from - before.t < 48 * HOUR) pts.unshift({ t: before.t, mv: before.mv });
+      }
+      const rows = this.db.samplesRange(rec.imei, pts.length >= 2 ? Math.min(from, pts[0].t) : from, to);
+      const period = pts.length >= 2 && pts[0].t < from ? sliceByTime(rows, from, to) : rows;
+      const m = motionStatsOf(period, thr24, thr12);
       let distanceM = 0;
-      if (m) distanceM = m.odo_pairs > 0 ? m.odo_m : gpsDistance(this.db.samplesRange(rec.imei, from, to));
+      if (m) distanceM = m.odo_pairs > 0 ? m.odo_m : gpsDistance(period);
       const s = sums.get(rec.imei) || { alerts: {} };
       const cal = this.vehicleCal(rec.imei);
       const span = Math.abs(cal.fullMv - cal.emptyMv) || 1;
       const toL = (mv) => (mv !== null && cal.tankLiters ? round((mv / span) * cal.tankLiters, 1) : null);
       let used = null;
       let fuelKm = null; // distance driven between the first and last trusted level used
-      if (rec.v.hasFuel && this.detState(rec)?.sensorOk !== false) {
-        const pts = (levels.get(rec.imei) || []).map((r) => ({ t: r.t, mv: r.mv }));
-        const before = this.db.lastLevelBefore(rec.imei, from);
-        if (before && from - before.t < 48 * HOUR) pts.unshift({ t: before.t, mv: before.mv });
+      if (fuelOn) {
         const litres = cal.tankLiters ? (mv) => this.litersAt(mv, cal) : null;
         const drainL = (e) => this.amountLitres(e.type, e.amount_mv, e.extra, cal);
         if (pts.length >= 2) {
-          const idx = motionIndex(this.db.samplesRange(rec.imei, pts[0].t, pts[pts.length - 1].t), thr24, thr12);
+          const spanRows = sliceByTime(rows, pts[0].t, pts[pts.length - 1].t);
+          const idx = motionIndex(spanRows, thr24, thr12);
           used = fuelBalance(pts, fuelEvents.get(rec.imei) || [], litres, drainL, (a, b) => idx.parked(a.t, b.t));
-          const fm = this.db.motionStats(rec.imei, pts[0].t, pts[pts.length - 1].t, thr24, thr12);
-          fuelKm = fm && fm.odo_pairs > 0 ? round(fm.odo_m / 1000, 1) : fm ? round(gpsDistance(this.db.samplesRange(rec.imei, pts[0].t, pts[pts.length - 1].t)) / 1000, 1) : 0;
+          fuelKm = round(rowsDistance(spanRows) / 1000, 1);
         }
         else if (distanceM < 1000 && (m?.engine_ms || 0) < 0.25 * HOUR) used = { mv: 0, l: litres ? 0 : null };
       }
@@ -1899,7 +1915,7 @@ function fuelBalance(allPts, events, litres, drainLitres, parked = () => false) 
 }
 
 /** Cumulative moving time, engine time and odometer over samples, to ask whether a vehicle
- *  stood still between two times (engine rule as in motionStats). */
+ *  stood still between two times (engine rule as in motionStatsOf). */
 function motionIndex(rows, thr24, thr12) {
   const n = rows.length;
   const T = new Float64Array(n);
@@ -1918,7 +1934,7 @@ function motionIndex(rows, thr24, thr12) {
       : p.ign === 1 && (p.pwr === null || p.pwr >= (p.pwr > 18000 ? thr24 : thr12));
     eng[k] = eng[k - 1] + (short && pOn ? dt : 0);
     let d = 0;
-    if (Number.isFinite(p.odo) && Number.isFinite(r.odo) && r.odo >= p.odo && r.odo - p.odo <= dt * 0.07 + 1000) d = r.odo - p.odo;
+    if (odoStepOk(p, r)) d = r.odo - p.odo;
     else if ((p.spd ?? 0) >= 3 && p.lat && p.lng && r.lat && r.lng) d = Math.min(haversineM(p.lat, p.lng, r.lat, r.lng), (dt / 1000) * 70 + 100);
     dist[k] = dist[k - 1] + d;
   }
@@ -1948,6 +1964,20 @@ function receiptOf(extra) {
   const litres = num(x.receiptL);
   const wentIn = num(x.wentInL);
   return { litres, wentIn, missing: num(x.missingL) ?? (wentIn === null ? litres : null) };
+}
+
+/** Odometer distance (m) over the rows when any two messages carry it, else GPS distance. */
+function rowsDistance(rows) {
+  let pairs = 0;
+  let d = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1];
+    const b = rows[i];
+    if (!Number.isFinite(a.odo) || !Number.isFinite(b.odo)) continue;
+    pairs++;
+    if (odoStepOk(a, b)) d += b.odo - a.odo;
+  }
+  return pairs > 0 ? d : gpsDistance(rows);
 }
 
 function gpsDistance(rows) {
