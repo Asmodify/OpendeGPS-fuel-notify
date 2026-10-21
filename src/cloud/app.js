@@ -274,35 +274,15 @@ async function summary(sql, b, hoursParam) {
   const from = now - h * HOUR - 60e3;
   const to = now + 60e3;
   const { engine } = await engineFor(sql, b);
-  const thr = [...engine.recs.values()].map((rec) => {
-    const runV = engine.detState(rec)?.runV;
-    const lim = Number.isFinite(runV) ? runV - 1000 : Infinity;
-    return { imei: rec.imei, thr24: Math.min(26400, lim), thr12: Math.min(13300, lim) };
-  });
-  const [sums, levels, fuelEvents, before, motion] = await Promise.all([
+  const [sums, levels, fuelEvents, before] = await Promise.all([
     sql`select imei, type, count(*) as n, sum(amount_mv)::float8 as amount from fuel.alerts where t >= ${from}::bigint and t <= ${to}::bigint group by imei, type`,
     sql`select imei, t, mv from fuel.levels where t >= ${from}::bigint and t <= ${to}::bigint order by imei, t`,
     sql`select imei, type, severity, title, t, from_t, amount_mv, extra, verdict from fuel.alerts
         where type in ('refuel', 'fuel_drain') and t >= ${from}::bigint and t <= ${to}::bigint order by imei, coalesce(from_t, t)`,
     sql`select v.imei, l.t, l.mv from fuel.vehicles v
         cross join lateral (select t, mv from fuel.levels where imei = v.imei and t < ${from}::bigint order by t desc limit 1) l`,
-    sql`select x.imei, count(*) as n,
-          sum(case when podo is not null and odo is not null and odo >= podo and (odo - podo) <= (t - pt) * 0.07 + 1000 then odo - podo else 0 end)::float8 as odo_m,
-          sum(case when podo is not null and odo is not null then 1 else 0 end)::float8 as odo_pairs,
-          sum(case when t - pt <= 300000 and (
-                (pspd >= 3 and (pign is null or pign <> 0))
-                or ((pspd is null or pspd < 3) and pign = 1 and (ppwr is null or ppwr >= (case when ppwr > 18000 then q.thr24 else q.thr12 end))))
-              then t - pt else 0 end)::float8 as engine_ms,
-          max(spd) as max_spd
-        from (select imei, t, odo, spd, lag(t) over w as pt, lag(odo) over w as podo, lag(ign) over w as pign, lag(spd) over w as pspd, lag(pwr) over w as ppwr
-              from fuel.samples where t >= ${from}::bigint and t <= ${to}::bigint
-              window w as (partition by imei order by t)) x
-        join unnest(${thr.map((x) => x.imei)}::text[], ${thr.map((x) => x.thr24)}::float8[], ${thr.map((x) => x.thr12)}::float8[]) as q(imei, thr24, thr12)
-          on q.imei = x.imei
-        group by x.imei`,
   ]);
-  // samples the report reads itself: GPS distance (no odometer) and the fuel balance span
-  const motionBy = new Map(motion.map((r) => [r.imei, { ...r }]));
+  // samples the report reads itself: the period (distance, engine time) and the fuel balance span
   const beforeBy = new Map(before.map((r) => [r.imei, { t: r.t, mv: r.mv }]));
   const levelsBy = new Map();
   for (const r of levels) {
@@ -311,22 +291,14 @@ async function summary(sql, b, hoursParam) {
   }
   const need = [];
   for (const rec of engine.recs.values()) {
-    let a = Infinity;
-    let z = -Infinity;
-    const m = motionBy.get(rec.imei);
-    if (m && !(m.odo_pairs > 0)) {
-      a = from;
-      z = to;
-    }
+    let a = from;
+    const z = to;
     if (rec.v.hasFuel && engine.detState(rec)?.sensorOk !== false) {
       const pts = levelsBy.get(rec.imei) || [];
       const bf = beforeBy.get(rec.imei);
       const first = bf && now - h * HOUR - bf.t < 48 * HOUR ? bf.t : pts[0]?.t;
       const n = pts.length + (bf && now - h * HOUR - bf.t < 48 * HOUR ? 1 : 0);
-      if (n >= 2) {
-        a = Math.min(a, first);
-        z = Math.max(z, pts[pts.length - 1].t);
-      }
+      if (n >= 2) a = Math.min(a, first);
     }
     if (a < z) need.push({ imei: rec.imei, a, z });
   }
@@ -347,13 +319,6 @@ async function summary(sql, b, hoursParam) {
   db.fuelEventRows = plain(fuelEvents);
   db.levelsBefore = beforeBy;
   db.samples = samples;
-  // the main period's motion sums come from SQL (Engine asks for exactly [now - h, now])
-  const mainFrom = from + 60e3;
-  const origMotion = db.motionStats.bind(db);
-  db.motionStats = (imei, a, z, thr24, thr12) => {
-    if (Math.abs(a - mainFrom) < 5 * 60e3 && Math.abs(z - now) < 5 * 60e3) return motionBy.get(imei) ?? null;
-    return origMotion(imei, a, z, thr24, thr12);
-  };
   const data = engine.summary(h);
   summaryCache.set(h, { at: Date.now(), ver: b.ver, data });
   return data;

@@ -141,21 +141,6 @@ export class Store {
       // moving with ignition not off, or stopped with ignition on AND the external voltage at
       // alternator-charging level (many trackers report ignition=1 with the engine off).
       // Parameters: thr24 (24 V systems), thr12 (12 V systems), imei, from, to.
-      motionStats: p(`SELECT COUNT(*) AS n,
-          SUM(CASE WHEN podo IS NOT NULL AND odo IS NOT NULL AND odo >= podo AND (odo - podo) <= (t - pt) * 0.07 + 1000
-                   THEN odo - podo ELSE 0 END) AS odo_m,
-          SUM(CASE WHEN podo IS NOT NULL AND odo IS NOT NULL THEN 1 ELSE 0 END) AS odo_pairs,
-          SUM(CASE WHEN t - pt <= 300000 AND (
-                     (pspd >= 3 AND (pign IS NULL OR pign <> 0))
-                     OR ((pspd IS NULL OR pspd < 3) AND pign = 1
-                         AND (ppwr IS NULL OR ppwr >= (CASE WHEN ppwr > 18000 THEN ? ELSE ? END))))
-                   THEN t - pt ELSE 0 END) AS engine_ms,
-          MAX(spd) AS max_spd
-        FROM (SELECT t, odo, spd,
-                     LAG(t) OVER w AS pt, LAG(odo) OVER w AS podo, LAG(ign) OVER w AS pign,
-                     LAG(spd) OVER w AS pspd, LAG(pwr) OVER w AS ppwr
-              FROM samples WHERE imei = ? AND t >= ? AND t <= ?
-              WINDOW w AS (ORDER BY t))`),
       fuelEvents: p(`SELECT imei, type, severity, title, t, from_t, amount_mv, extra, verdict FROM alerts
         WHERE type IN (${LEDGER_TYPES.map((x) => `'${x}'`).join(', ')}) AND t >= ? AND t <= ?
         ORDER BY imei, COALESCE(from_t, t)`),
@@ -263,11 +248,6 @@ export class Store {
 
   /** Distance / engine time / max speed of one vehicle (null without samples);
    *  thr24 / thr12 = external voltage (mV) above which a stopped engine counts as running. */
-  motionStats(imei, from, to, thr24 = 26400, thr12 = 13300) {
-    const r = this.st.motionStats.get(thr24, thr12, imei, from, to);
-    return r && r.n ? r : null;
-  }
-
   /** refuel / fuel_drain alerts detected in [from, to] (also cancelled drains, whose amount is
    *  null, and the owner's verdict: see ledger.js ledgerEntry). */
   fuelEvents(from, to) {

@@ -382,7 +382,7 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger, look
       if (!r.ok) throw new HttpError(409, r.error);
       return send(res, 200, r);
     }
-    if (m === 'GET' && p === '/api/summary') return send(res, 200, engine.summary(intParam(q.get('hours')) ?? 24));
+    if (m === 'GET' && p === '/api/summary') return send(res, 200, engine.summary(intParam(q.get('hours')) ?? 24, { fresh: q.get('fresh') === '1' }));
     if (m === 'GET' && p === '/api/settings') return send(res, 200, engine.settingsView());
     if (m === 'PUT' && p === '/api/settings') {
       const r = engine.putSettings(await readJson(req));

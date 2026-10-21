@@ -9,34 +9,6 @@ const nz = (x) => (x === undefined || (typeof x === 'number' && !Number.isFinite
 const SAMPLE_COLS = ['t', 'f', 'spd', 'ign', 'pwr', 'lat', 'lng', 'odo'];
 const VEHICLE_COLS = ['name', 'group_name', 'device', 'plate', 'sim', 'has_fuel', 'last_seen', 'server_seen', 'lat', 'lng', 'speed', 'angle', 'ign', 'pwr', 'fuel_raw', 'odometer_km', 'status'];
 
-/** Distance / engine time / max speed over samples in time order: the same sums as the
- *  motionStats SQL in db.js (null without samples). */
-export function motionStatsOf(rows, thr24 = 26400, thr12 = 13300) {
-  if (!rows.length) return null;
-  let odoM = 0;
-  let odoPairs = 0;
-  let engineMs = 0;
-  let maxSpd = null;
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    if (r.spd !== null && r.spd !== undefined && (maxSpd === null || r.spd > maxSpd)) maxSpd = r.spd;
-    if (i === 0) continue;
-    const p = rows[i - 1];
-    const dt = r.t - p.t;
-    if (p.odo !== null && p.odo !== undefined && r.odo !== null && r.odo !== undefined) {
-      odoPairs++;
-      if (r.odo >= p.odo && r.odo - p.odo <= dt * 0.07 + 1000) odoM += r.odo - p.odo;
-    }
-    const pspd = p.spd ?? null;
-    const pign = p.ign ?? null;
-    const ppwr = p.pwr ?? null;
-    const on = (pspd !== null && pspd >= 3 && (pign === null || pign !== 0))
-      || ((pspd === null || pspd < 3) && pign === 1 && (ppwr === null || ppwr >= (ppwr > 18000 ? thr24 : thr12)));
-    if (dt <= 300000 && on) engineMs += dt;
-  }
-  return { n: rows.length, odo_m: odoM, odo_pairs: odoPairs, engine_ms: engineMs, max_spd: maxSpd };
-}
-
 export class MemDb {
   /**
    * data (all optional):
@@ -54,7 +26,6 @@ export class MemDb {
    *   levelsBefore  Map imei -> { t, mv } (last level before the summary period)
    *   fuelEvents    rows for fuelEvents()
    *   alertSums     rows for alertSums()
-   *   motion        Map `${imei}:${from}:${to}` -> motionStats row
    *   ledgerAlerts  rows for ledgerAlerts()
    *   meta          { key: value }
    */
@@ -75,7 +46,6 @@ export class MemDb {
     this.levelsBefore = data.levelsBefore || new Map();
     this.fuelEventRows = data.fuelEvents || [];
     this.alertSumRows = data.alertSums || [];
-    this.motion = data.motion || new Map();
     this.ledgerAlertRows = data.ledgerAlerts || [];
     this.meta = { ...(data.meta || {}) };
     // changes to write back
@@ -160,12 +130,6 @@ export class MemDb {
 
   samplesRange(imei, from, to) {
     return (this.samples.get(imei) || []).filter((r) => r.t >= from && r.t <= to).map((r) => ({ ...r }));
-  }
-
-  motionStats(imei, from, to, thr24 = 26400, thr12 = 13300) {
-    const k = `${imei}:${from}:${to}`;
-    if (this.motion.has(k)) return this.motion.get(k);
-    return motionStatsOf(this.samplesRange(imei, from, to), thr24, thr12);
   }
 
   fuelEvents(from, to) {
