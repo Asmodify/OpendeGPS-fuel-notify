@@ -1,9 +1,9 @@
 name: Facebook posts
 
-# Mon, Wed, Fri at 10:00 Ulaanbaatar time (02:00 UTC).
+# Manual runs only. To post on a timer again, add back:
+#   schedule:
+#     - cron: "0 2 * * 1,3,5"   # Mon, Wed, Fri at 10:00 Ulaanbaatar time
 on:
-  schedule:
-    - cron: "0 2 * * 1,3,5"
   workflow_dispatch:
     inputs:
       live:
@@ -32,9 +32,8 @@ jobs:
         env:
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
-          # Live only when the FB_LIVE repo variable is "true" (scheduled runs)
-          # or the manual run ticks "live".
-          FB_LIVE: ${{ (vars.FB_LIVE == 'true' && (github.event_name == 'schedule' || inputs.live)) && '1' || '0' }}
+          # Live only when the FB_LIVE repo variable is "true" and the manual run ticks "live".
+          FB_LIVE: ${{ (vars.FB_LIVE == 'true' && inputs.live) && '1' || '0' }}
         run: python facebook/fb_poster.py run
       - name: Save posted ids
         if: always()
