@@ -2004,7 +2004,7 @@ function renderReport() {
     const b = th.querySelector('button');
     th.setAttribute('aria-sort', b && b.dataset.sort === r.sort ? (r.dir > 0 ? 'ascending' : 'descending') : 'none');
   });
-  const body = $('#r-body'), empty = $('#r-empty'), tiles = $('#r-tiles');
+  const body = $('#r-body'), foot = $('#r-foot'), empty = $('#r-empty'), tiles = $('#r-tiles');
   document.querySelector('.report-tbl').classList.toggle('is-loading', r.loading && !!r.rows);
   tiles.classList.toggle('is-loading', r.loading && !!r.rows);
   // a month of tracker messages takes several seconds: say so instead of showing the old period
@@ -2013,6 +2013,7 @@ function renderReport() {
   if (!busy.hidden) setHTML(busy, html`<span class="spinner"></span>Тайлан бэлтгэж байна (${(PERIOD_LABEL[r.hours] || `сүүлийн ${r.hours} цаг`).toLowerCase()})…${r.hours > 24 ? ' Урт хугацааг тооцоход хэдэн секунд болно.' : ''}`);
   if (!r.rows) {
     body.innerHTML = '';
+    foot.innerHTML = '';
     tiles.innerHTML = '';
     empty.hidden = false;
     setHTML(empty, r.error ? emptyState('wifi-off', 'Тайланг ачаалж чадсангүй', r.error, { id: 'retry-report', label: 'Дахин оролдох' }) : html`<div class="empty"><span class="spinner"></span><b>Тайлан бэлтгэж байна…</b></div>`);
@@ -2023,11 +2024,14 @@ function renderReport() {
   rows.sort((a, b) => cmp(a, b) * r.dir || R_SORT.name(a, b));
   // Totals for the tiles (same slice as the table)
   let dist = 0, eng = 0, usedL = 0, usedLn = 0, usedPartial = 0, refuelL = 0, refuelN = 0, refuelLn = 0, drainL = 0, drainN = 0, drainLn = 0, crit = 0, active = 0;
+  let rateL = 0, rateKm = 0, alertsN = 0; // for the totals row under the table
   for (const x of rows) {
     dist += x.distanceKm || 0;
     eng += x.engineHours || 0;
     if (x.partial || x.stuck) usedPartial++; // incomplete or impossible figures are left out of the total
     else if (x.usedL !== null) { usedL += x.usedL; usedLn++; }
+    if (x.rate !== null && !x.partial) { rateL += x.usedL; rateKm += x.fuelKm ?? x.distanceKm ?? 0; }
+    alertsN += x.total;
     if (x.refuelMv > 0) { refuelN++; if (x.refuelL !== null) { refuelL += x.refuelL; refuelLn++; } }
     if (x.drainMv > 0) { drainN++; if (x.drainL !== null) { drainL += x.drainL; drainLn++; } }
     crit += x.crit;
@@ -2047,6 +2051,7 @@ function renderReport() {
   `);
   if (!rows.length) {
     body.innerHTML = '';
+    foot.innerHTML = '';
     empty.hidden = false;
     setHTML(empty, emptyState('search', 'Тохирох машин алга', 'Хайлт эсвэл бүлгийн шүүлтүүрээ цэвэрлээд үзнэ үү.'));
     return;
@@ -2068,6 +2073,19 @@ function renderReport() {
       <td class="c-ralerts">${chips.length ? chips.slice(0, 4).map(([t, c]) => html`<span class="chip sev-${typeInfo(t).severity}" title="${typeLabel(t)}">${icon(TYPE_ICON[t] || SEV_ICON[typeInfo(t).severity])}${c}</span>`) : html`<span class="muted">—</span>`}${chips.length > 4 ? html`<span class="chip">+${chips.length - 4}</span>` : ''}</td>
     </tr>`;
   })}`);
+  // Totals row: the same sums as the tiles; fuel figures that are incomplete or need checking stay out
+  const dash = html`<span class="muted">—</span>`;
+  setHTML(foot, html`<tr>
+    <td class="c-name">Нийт · ${veh(rows.length)}</td>
+    <td class="c-group"></td>
+    <td class="num">${fmtNum(dist)} км</td>
+    <td class="num c-eng">${fmtNum(eng, 1)} ц</td>
+    <td class="num">${usedLn ? `${fmtNum(usedL)} л` : dash}</td>
+    <td class="num c-rate">${rateKm >= 10 ? `${fmtNum((rateL / rateKm) * 100, 1)} л` : dash}</td>
+    <td class="num c-refuel">${!refuelN ? dash : refuelLn === refuelN ? `${fmtNum(refuelL)} л` : veh(refuelN)}</td>
+    <td class="num">${!drainN ? dash : html`<span class="rc-bad">${drainLn === drainN ? `${fmtNum(drainL)} л` : veh(drainN)}</span>`}</td>
+    <td class="c-ralerts">${alertsN ? fmtNum(alertsN) : dash}</td>
+  </tr>`);
 }
 function exportCsv() {
   const r = S.report;

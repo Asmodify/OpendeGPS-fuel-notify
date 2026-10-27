@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="70" height="90" viewBox="0 0 70 90" role="img" aria-label="Open Teever">
+  <rect x="0" y="16" width="70" height="54" fill="#F7BD0C"/>
+  <path d="M44 70H58L44 90Z" fill="#8A8A8A"/>
+  <path d="M0 0H70V16H44V90L26 77V16H0Z" fill="#FFFFFF"/>
+</svg>
