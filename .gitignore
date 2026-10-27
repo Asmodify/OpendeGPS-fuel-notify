@@ -18,3 +18,5 @@ evidence/
 node_modules/
 .vercel
 .claude/
+facebook/preview.html
+__pycache__/
