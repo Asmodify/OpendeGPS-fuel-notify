@@ -182,12 +182,18 @@ const intParam = (v) => {
 };
 const listParam = (v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined);
 
-export function createHandler({ cfg, engine, poller, notifier, hub, ledger, lookupAdminWeb }) {
+export function createHandler({ cfg, engine, poller, notifier, hub, ledger, lookupAdminWeb, openTee }) {
   const publicDir = path.resolve(cfg.publicDir);
   const loopbackOnly = ['127.0.0.1', 'localhost', '::1'].includes(cfg.host);
   const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
   const auth = makeAuth(cfg);
   const apiUrl = openTeeSettings(cfg).url;
+  // named refuel places for the export: config.local.json first, then the fuel stations from the
+  // admin web's Газрууд page
+  const refuelPlaces = () => [
+    ...(Array.isArray(cfg.refuelPlaces) ? cfg.refuelPlaces : []),
+    ...(openTee?.places() ?? []).filter((x) => x.kind === 'fuel').map(({ name, lat, lng, radiusM }) => ({ name, lat, lng, radiusM })),
+  ];
   const lookup = lookupAdminWeb || ((token) => adminWebUser(apiUrl, token, cfg.ssoCompanyIds || []));
   const onServer = process.platform !== 'win32';
 
@@ -257,6 +263,8 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger, look
     }
     if (m === 'GET' && p === '/api/status') return send(res, 200, poller.statusView());
     if (m === 'GET' && p === '/api/vehicles') return send(res, 200, engine.vehiclesView());
+    // named places for the map, from the admin web's Газрууд page (opentee.js)
+    if (m === 'GET' && p === '/api/places') return send(res, 200, { places: openTee?.places() ?? [] });
     if (seg[0] === 'vehicles' && seg[1]) {
       const imei = seg[1];
       const rec = engine.recs.get(imei);
@@ -291,7 +299,7 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger, look
       const info = { filter, alertTypes: engine.alertTypes, vehicleName, now, tzOffsetMinutes: engine.tzOffsetMin };
       const fillSpots = refuelFillSpots(alerts, (imei, from, to) => engine.db.samplesRange(imei, from, to));
       const { buildXlsx } = await import('./xlsx.js');
-      const sheets = buildAlertSheets({ ...info, alerts, timezone: cfg.timezone, limited, fillSpots, refuelPlaces: cfg.refuelPlaces });
+      const sheets = buildAlertSheets({ ...info, alerts, timezone: cfg.timezone, limited, fillSpots, refuelPlaces: refuelPlaces() });
       const buf = buildXlsx(sheets, alertsXlsxOpts(engine.tzOffsetMin));
       res.writeHead(200, {
         'content-type': XLSX_TYPE,

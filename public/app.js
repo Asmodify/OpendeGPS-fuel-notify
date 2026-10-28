@@ -88,6 +88,8 @@ const OVERRIDE_KEYS = ['drainParkedMv', 'drainTripMv', 'consumptionMvPerHour', '
 // ---------------------------------------------------------------- state
 const S = {
   view: null,
+  places: [], // named places from the admin web (Газрууд), see loadPlaces
+  placesLayer: null,
   meta: { alertTypes: FALLBACK_TYPES, groups: [] },
   // 'local' (Windows program, live updates over SSE) or 'cloud' (Vercel: polled, sign-in)
   mode: 'local',
@@ -1081,7 +1083,75 @@ function ensureMap() {
   }
   mapObj = L.map('map', { zoomControl: true, worldCopyJump: false }).setView([46.8, 103.8], 5);
   L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }).addTo(mapObj);
+  S.placesLayer = L.layerGroup().addTo(mapObj);
+  drawPlaces(S.placesLayer);
+  followPlaces(mapObj);
   return true;
+}
+// ---- named places (admin web: Газрууд) -----------------------------------------------------
+// Our НАБТ, fuel stations, terminals, border ports, mines and parking, drawn under the trucks on
+// both maps: a small square in the kind's colour and the name beside it. Names show from zoom 8
+// in; where two overlap only the more important one stays.
+const PLACE_KIND = {
+  base: 'Манай бааз / НАБТ', fuel: 'ШТС', terminal: 'Терминал / НАБТ', border: 'Боомт', mine: 'Уурхай', parking: 'Зогсоол', other: 'Газар',
+};
+const PLACE_RANK = { base: 0, fuel: 1, border: 2, terminal: 3, mine: 4, parking: 5, other: 6 };
+const PLACE_GLYPH = {
+  fuel: '<path d="M3 13V3.5A1.5 1.5 0 0 1 4.5 2h4A1.5 1.5 0 0 1 10 3.5V13M2 13h9M10 6h1.2a1 1 0 0 1 1 1v3.3a.9.9 0 0 0 1.8 0V5.5L12.2 3.7M4.5 5.5h4"/>',
+  border: '<path d="M3.5 14V2.5M3.5 3h7.5l-1.8 2.8L11 8.5H3.5"/>',
+  mine: '<path d="M3 13 9.5 6.5M4.5 4.2C6.8 2.3 10 2.2 12.5 3.5c1.3 2.5 1.2 5.7-.7 8M8.2 3.3l4.5 4.5"/>',
+  parking: '<path d="M5.5 13V3h3a2.7 2.7 0 0 1 0 5.4h-3"/>',
+  base: '<path d="M2 13V5.5L8 2.5l6 3V13M4.5 13V8.5h7V13M4.5 10.7h7"/>',
+  terminal: '<path d="M2 13V5.5L8 2.5l6 3V13M4.5 13V8.5h7V13M4.5 10.7h7"/>',
+  other: '<circle cx="8" cy="8" r="2.5"/>',
+};
+const PLACE_LABEL_ZOOM = 8;
+function placeIcon(p) {
+  const kind = PLACE_KIND[p.kind] ? p.kind : 'other';
+  return L.divIcon({
+    className: 'pl-wrap',
+    html: `<div class="pl pl-${kind}" data-rank="${PLACE_RANK[kind]}"><span class="pl-sq"><svg viewBox="0 0 16 16">${PLACE_GLYPH[kind]}</svg></span><span class="pl-name">${esc(p.name)}</span></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  });
+}
+function drawPlaces(layer) {
+  if (!layer) return;
+  layer.clearLayers();
+  for (const p of S.places) {
+    if (!validLatLng(p)) continue;
+    L.marker([p.lat, p.lng], { icon: placeIcon(p), title: `${p.name} · ${PLACE_KIND[p.kind] || PLACE_KIND.other}`, keyboard: false, zIndexOffset: -1000 }).addTo(layer);
+  }
+}
+// hides the names when zoomed far out, and a name that would cover a more important one
+function declutterPlaces(map) {
+  const box = map.getContainer();
+  box.classList.toggle('pl-far', map.getZoom() < PLACE_LABEL_ZOOM);
+  const names = $$('.pl-name', box);
+  names.forEach((n) => (n.style.visibility = ''));
+  const kept = [];
+  names
+    .map((n) => ({ n, rank: Number(n.parentElement.dataset.rank), r: n.getBoundingClientRect() }))
+    .filter((x) => x.r.width > 0)
+    .sort((a, b) => a.rank - b.rank)
+    .forEach(({ n, r }) => {
+      if (kept.some((k) => r.left < k.right + 4 && r.right + 4 > k.left && r.top < k.bottom + 2 && r.bottom + 2 > k.top)) n.style.visibility = 'hidden';
+      else kept.push(r);
+    });
+}
+function followPlaces(map) {
+  let frame = 0;
+  const sync = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(() => declutterPlaces(map)); };
+  map.on('zoomend moveend layeradd', sync);
+  sync();
+}
+async function loadPlaces() {
+  try {
+    const r = await api('/api/places');
+    S.places = Array.isArray(r?.places) ? r.places : [];
+  } catch { return; } // the map works without them
+  drawPlaces(S.placesLayer);
+  drawPlaces(S.detail?.placesLayer);
 }
 function mapFilterPass(v) {
   const f = S.map.filter;
@@ -2493,6 +2563,9 @@ function initDetailMap() {
   if (!window.L) { el.classList.add('no-map'); el.textContent = 'Газрын зураг байхгүй (газрын зургийг ачаалах интернэт холболт алга).'; return; }
   d.map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true }).setView([46.8, 103.8], 5);
   L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }).addTo(d.map);
+  d.placesLayer = L.layerGroup().addTo(d.map);
+  drawPlaces(d.placesLayer);
+  followPlaces(d.map);
   d.alertLayer = L.layerGroup().addTo(d.map);
   d.centered = false;
   updateDetailMap();
@@ -3140,6 +3213,8 @@ async function init() {
   document.body.classList.toggle('has-login', !!S.auth);
   await Promise.all([loadSettings(), loadStatus()]);
   await loadVehicles();
+  loadPlaces();
+  setInterval(loadPlaces, 10 * 60e3);
   populateSelects();
   syncFleetControls();
   await loadRecentAlertIds();

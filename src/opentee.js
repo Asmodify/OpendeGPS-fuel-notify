@@ -18,6 +18,10 @@
 // program's receipt list, checked against the refuels the fuel sensor saw (receipts.js), and the
 // result - how much went into the tank, how much is missing - is sent back to the API, where the
 // admin web's fuel ledger shows it.
+//
+// The named places the office keeps on the admin page Газрууд (our НАБТ, fuel stations, border
+// ports, mines...) are fetched every 10 minutes and kept in the meta table, so the dashboard map
+// can label them even while the API is unreachable.
 import crypto from 'node:crypto';
 import { log, errText, num, round, shortName } from './util.js';
 import { parseExtra, isPendingDrain, ledgerEntry, litersAt, fuelEventLitres } from './ledger.js';
@@ -33,6 +37,11 @@ const TIMEOUT_MS = 30 * 1000;
 const RECEIPTS_PATH = '/api/v1/integrations/fuel-warner/receipts';
 const CHECKS_PATH = '/api/v1/integrations/fuel-warner/receipt-checks';
 const RECEIPT_CURSOR_KEY = 'opentee.receiptCursor';
+const PLACES_PATH = '/api/v1/integrations/fuel-warner/places';
+const PLACES_KEY = 'opentee.places';
+const PLACES_EVERY_MS = 10 * 60 * 1000;
+const PLACES_MAX = 500;
+const PLACE_KINDS = ['base', 'fuel', 'terminal', 'border', 'mine', 'parking', 'other'];
 const CHECKS_KEY = 'opentee.receiptChecks'; // { entryId: what was last sent }
 const NO_TRACKER_KEY = 'opentee.receiptsNoTracker'; // receipts for vehicles without a known tracker
 // a driver may upload the receipt hours after filling up: the receipt is matched to a refuel on
@@ -195,6 +204,24 @@ export function toReceiptCheck(r) {
 
 const checkHash = (c) => JSON.stringify(c);
 
+/** A place from the API -> the shape kept here and served to the dashboard, or null when unusable. */
+export function toWarnerPlace(x) {
+  const lat = Number(x?.lat);
+  const lng = Number(x?.lng);
+  const name = typeof x?.name === 'string' ? x.name.trim().slice(0, 120) : '';
+  if (!name || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  const radiusM = Number(x.radiusM);
+  return {
+    id: String(x.id ?? `${lat},${lng}`),
+    name,
+    kind: PLACE_KINDS.includes(x.kind) ? x.kind : 'other',
+    lat,
+    lng,
+    radiusM: Number.isFinite(radiusM) && radiusM > 0 ? Math.min(radiusM, 20000) : 300,
+    checked: x.checked !== false,
+  };
+}
+
 export class OpenTeeLink {
   /** @param {{cfg: object, engine: object, db: object, fetchImpl?: Function}} o */
   constructor({ cfg, engine, db, fetchImpl = globalThis.fetch }) {
@@ -205,6 +232,7 @@ export class OpenTeeLink {
     this.timer = null;
     this.running = null;
     this.pauseUntil = 0;
+    this.placesAt = 0;
     this.lastError = null;
     this.status = { enabled: this.settings.enabled, url: this.settings.url, sent: 0, lastOkAt: null, lastError: null, lastErrorAt: null, unmatched: [] };
     const types = OPENTEE_TYPES.map(() => '?').join(',');
@@ -245,6 +273,7 @@ export class OpenTeeLink {
       await this.sendEvents();
       await this.pullReceipts();
       await this.pushReceiptChecks();
+      await this.pullPlaces();
     } catch (e) {
       const msg = errText(e);
       this.status.lastError = msg;
@@ -379,6 +408,33 @@ export class OpenTeeLink {
       for (const c of batch) sentHashes[c.id] = checkHash(c);
       this.store.setMeta(CHECKS_KEY, JSON.stringify(sentHashes));
     }
+  }
+
+  // ---- named places for the map ---------------------------------------------------------
+
+  /** Fetches the named places every PLACES_EVERY_MS. An API without the list (older server) is skipped for an hour. */
+  async pullPlaces(now = Date.now()) {
+    if (now - this.placesAt < PLACES_EVERY_MS) return;
+    this.placesAt = now;
+    let body;
+    try {
+      body = await this.request('GET', PLACES_PATH);
+    } catch (e) {
+      if (e.status === 404 || e.status === 503) {
+        this.placesAt = now + 50 * 60 * 1000;
+        return;
+      }
+      throw e;
+    }
+    if (!Array.isArray(body?.places)) return;
+    const list = body.places.map(toWarnerPlace).filter(Boolean).slice(0, PLACES_MAX);
+    this.store.setMeta(PLACES_KEY, JSON.stringify(list));
+  }
+
+  /** The places last fetched (an empty list until the first fetch). */
+  places() {
+    const list = this.metaJson(PLACES_KEY, []);
+    return Array.isArray(list) ? list : [];
   }
 
   tzMin() {

@@ -594,6 +594,18 @@ body[data-view="map"]:has(.banners:not(:empty)) .map-layout { height: calc(100dv
 .mk-arrow { width: 70%; height: 70%; fill: #fff; stroke: none; }
 .leaflet-tooltip.mk-label { background: var(--surface); color: var(--ink); border: 1px solid var(--line-2); border-radius: var(--radius-xs); box-shadow: none; font: 600 12px var(--font); padding: 1px 6px; }
 .leaflet-tooltip.mk-label::before { display: none; }
+/* named places (admin web: Газрууд): colour = kind */
+.pl-wrap { background: none; border: 0; }
+.pl { position: relative; width: 18px; height: 18px; --pl: var(--park); }
+.pl-sq { display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 3px; background: var(--pl); border: 1.5px solid #fff; box-sizing: border-box; }
+.pl-sq svg { width: 12px; height: 12px; fill: none; stroke: #fff; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pl-name { position: absolute; left: 22px; top: 50%; transform: translateY(-50%); white-space: nowrap; font: 600 12px/1.2 var(--font); color: var(--ink); paint-order: stroke; -webkit-text-stroke: 3px var(--surface); pointer-events: none; }
+.pl-far .pl-name { display: none; }
+.pl-base { --pl: #17181a; }
+.pl-fuel { --pl: #c98a00; }
+.pl-terminal { --pl: var(--info); }
+.pl-border { --pl: var(--crit); }
+.pl-mine { --pl: #78350f; }
 .leaflet-container { font: inherit; background: var(--surface-3); }
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--ink); box-shadow: none; }
 .leaflet-popup-content-wrapper { border: 1px solid var(--line-2); border-radius: var(--radius); }
