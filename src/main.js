@@ -62,7 +62,7 @@ ledger.start();
 // Open Tee (fleet app + admin web): fuel events are sent to its API when a key is configured
 const openTee = new OpenTeeLink({ cfg, engine, db });
 openTee.start();
-const server = http.createServer(createHandler({ cfg, engine, poller, notifier, hub, ledger }));
+const server = http.createServer(createHandler({ cfg, engine, poller, notifier, hub, ledger, openTee }));
 server.keepAliveTimeout = 65000;
 
 function openBrowser(url) {
