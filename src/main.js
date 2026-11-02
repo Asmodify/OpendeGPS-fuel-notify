@@ -131,7 +131,12 @@ server.on('error', (e) => {
   }
 });
 
-server.listen(cfg.port, cfg.host, () => {
+// Reachable from other machines (Docker, a server) only with a dashboard
+// password: without one every API would be open to anyone who can reach it.
+if (!['127.0.0.1', 'localhost', '::1'].includes(cfg.host) && !cfg.dashboardPassword) {
+  log('error', `Refusing to listen on ${cfg.host} without DASHBOARD_PASSWORD. Set it in .env, or listen on 127.0.0.1.`);
+  shutdown(1, 'no dashboard password');
+} else server.listen(cfg.port, cfg.host, () => {
   log('info', `Dashboard: ${dashboardUrl}`);
   poller.start();
   if (cfg.openBrowser) setTimeout(() => openBrowser(dashboardUrl), 800);
