@@ -295,6 +295,8 @@ function rcRow(r, e) {
   const m = e.meter;
   if (!r.main || e.alert.type !== 'receipt_mismatch' || !m) return r;
   if (m.verdict === 'short' || m.verdict === 'full' || m.verdict === 'norefuel') {
+    // the receipt check's shortfall is never wiped: a meter that reads the fill as whole keeps it
+    if (m.verdict === 'full' && r.status === 'short') return r;
     return { ...r, refuel: m.wentIn > 0 ? { wentIn: m.wentIn } : null, missing: m.verdict === 'full' ? 0 : m.lost, status: m.verdict === 'full' ? 'ok' : m.verdict };
   }
   return { ...r, refuel: null, missing: null, status: m.verdict, statusText: meterLabel(e) };
