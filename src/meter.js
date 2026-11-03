@@ -38,6 +38,8 @@ const MOVE_KMH = 3;
 const LOOK = 6 * HOUR; // how far back / ahead the level before / after may be taken
 const NEAR = 5; // readings nearest the event that make the level before / after
 const SETTLE = 10 * MIN; // fuel sloshes for minutes after the truck pulls up: no level before that
+const RECEIPT_MIN_L = 20; // = receipts.js MISSING_MIN_L
+const RECEIPT_MIN_PCT = 5; // = receipts.js MISSING_MIN_PCT
 const PEGGED_MV = 9950; // the probes are 0-10 V: a reading at the limit is a wiring fault, not a level
 const GAP = 15 * MIN; // a longer silence between two readings is "no data" (as the pack's facts count it)
 const RUN_MIN = 10 * MIN; // a drive this long, or RUN_KM far, ends a stop; a shorter move (up to the
@@ -313,7 +315,11 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
     const tail = win.slice(Math.max(0, win.length - 60));
     if (stuck(win) || stuck(tail)) return out('sensor', { note: 'stuck' });
     const { rise, rise0, rise1 } = swings(m);
-    const tol = Math.max(40, receiptL * 0.15); // tank tables are 10-15 % off near the top; fills splash
+    // the same line the receipt check draws (receipts.js MISSING_MIN_L / MISSING_MIN_PCT): 20 L or
+    // 5 % of the receipt. It was 40 L / 15 %, which called a fill that was 47 L short of a 500 L
+    // receipt "full" and so wiped the shortfall from the evidence (9643УЕН, 2026-10-21). Across the
+    // fleet the tank tables read within ~2.5 % (590 L) to ~7.5 % (480 L) of the receipts.
+    const tol = Math.max(RECEIPT_MIN_L, receiptL * RECEIPT_MIN_PCT / 100);
     const need = Math.max(30, receiptL * 0.25);
     if (rise >= need) {
       // the refuel itself: the meter at the bottom and at the top of its largest rise, inside one
