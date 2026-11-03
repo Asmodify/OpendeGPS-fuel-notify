@@ -1237,12 +1237,14 @@ export class Engine {
           const f = r.refuel;
           this.raiseAlert({
             ...base, severity: 'critical', t: f.t, fromT: f.fromT, lat: f.lat, lng: f.lng,
-            wentInL: f.wentIn, missingL: r.missing, roomL: r.room,
+            wentInL: f.wentIn, missingL: r.missing, roomL: r.room, beforeL: f.before, afterL: f.after,
+            receiptDate: when, nofit: !!r.nofit, station: r.station || undefined,
             title: `Receipt ${fmt(r.litres)}, tank got ${fmt(f.wentIn)}`,
             detail: `Fuel receipt for ${fmt(r.litres)} (${when}), but the tank rose only ${fmt(f.wentIn)}` +
               `${f.before !== null && f.after !== null ? ` (${fmt(f.before)} → ${fmt(f.after)})` : ''} at ${fmtLocal(f.fromT, tz)}: ${fmt(r.missing)} missing.` +
               `${r.nofit ? ` The receipt does not even fit: the tank had room for only ${fmt(r.room)}.` : ''}`,
           }, mode);
+          if (mode === 'live') this.fillReceiptAlert(base.key, { wentInL: f.wentIn, missingL: r.missing, roomL: r.room, beforeL: f.before, afterL: f.after, receiptDate: when, nofit: !!r.nofit });
         } else if (r.status === 'norefuel') {
           this.raiseAlert({
             ...base, severity: 'warning', t: localMs(r.date, r.time, this.tzOffsetMin), fromT: null,
@@ -1253,6 +1255,22 @@ export class Engine {
       } catch (e) {
         log('error', 'Checking a fuel receipt failed:', e);
       }
+    }
+  }
+
+  /** A receipt alert stored before it kept every figure (levels before / after, the receipt's
+   *  date, "does not fit"): the missing ones are added, so its record is complete. */
+  fillReceiptAlert(key, fields) {
+    try {
+      const id = this.db.alertIdByKey(key);
+      const row = id ? this.db.getAlert(id) : null;
+      if (!row) return;
+      const x = parseExtra(row.extra);
+      const add = {};
+      for (const [k, v] of Object.entries(fields)) if (x[k] === undefined && v !== undefined && v !== null) add[k] = v;
+      if (Object.keys(add).length) this.patchAlert(row.id, add, false);
+    } catch (e) {
+      log('error', 'Completing a receipt alert failed:', e);
     }
   }
 

@@ -138,6 +138,9 @@ export function toOpenTeeEvent(row, cal) {
     deltaL = missing === null ? null : round(-missing, 1);
     const id = String(x.receiptId || '');
     receiptId = id.startsWith('ot-') ? id.slice(3) : null;
+    // the tank before and after the fill the receipt was matched to
+    beforeL = num(x.beforeL) === null ? null : round(num(x.beforeL), 1);
+    afterL = num(x.afterL) === null ? null : round(num(x.afterL), 1);
   }
   const title = mnTitle(row.title || '');
   const detail = mnDetail(row.detail || '');
