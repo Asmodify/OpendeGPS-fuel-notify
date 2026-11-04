@@ -26,11 +26,14 @@ const FALLBACK_TYPES = {
   power_restored: { severity: 'info', label: 'Тэжээл сэргэсэн' },
   back_online: { severity: 'info', label: 'Дахин холбогдсон' },
   receipt_mismatch: { severity: 'critical', label: 'Баримт зөрсөн' },
+  drive_rest_soon: { severity: 'warning', label: 'Удахгүй амрах шаардлагатай' },
+  drive_no_rest: { severity: 'critical', label: 'Амралтгүй жолоодсон' },
 };
 const TYPE_ICON = {
   fuel_drain: 'drop-down', refuel: 'drop-up', power_cut: 'bolt-off', power_restored: 'bolt', sensor_lost: 'sensor-off',
   sensor_restored: 'sensor', low_fuel: 'fuel', long_idle: 'clock', overspeed: 'gauge', offline: 'wifi-off',
   back_online: 'wifi', server_event: 'server', after_hours: 'moon', receipt_mismatch: 'sheet',
+  drive_rest_soon: 'clock', drive_no_rest: 'clock',
 };
 // Owner's verdict on a fuel drain (saved in the Excel fuel ledger)
 const VERDICTS = { unchecked: 'Шалгаагүй', confirmed: 'Хулгай батлагдсан', false_alarm: 'Худал дохио' };
