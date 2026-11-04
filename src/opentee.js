@@ -75,7 +75,10 @@ const TYPE_MAP = {
   long_idle: 'LONG_IDLE',
   overspeed: 'OVERSPEED',
   receipt_mismatch: 'RECEIPT_MISMATCH',
+  drive_rest_soon: 'DRIVE_REST_SOON',
+  drive_no_rest: 'DRIVE_NO_REST',
 };
+const DRIVE_TYPES = new Set(['drive_rest_soon', 'drive_no_rest']);
 export const OPENTEE_TYPES = Object.keys(TYPE_MAP);
 
 /** Settings from cfg.openTee and the environment. */
@@ -144,6 +147,15 @@ export function toOpenTeeEvent(row, cal) {
   }
   const title = mnTitle(row.title || '');
   const detail = mnDetail(row.detail || '');
+  // driving without rest: how long, how many reminders, and when the rest began
+  const drive = DRIVE_TYPES.has(row.type) ? {
+    driveMinutes: num(x.driveMin),
+    limitMinutes: num(x.limitMin),
+    restMinutes: num(x.restMin),
+    reminder: num(x.remind) ?? 0,
+    reminderAt: iso(num(x.remindT)),
+    restAt: row.ongoing ? null : iso(num(x.restT)),
+  } : null;
   return {
     // the alert key is stable even if the local database is rebuilt; hashed so it carries no IMEI
     id: crypto.createHash('sha256').update(String(row.key)).digest('hex').slice(0, 40),
@@ -153,7 +165,7 @@ export function toOpenTeeEvent(row, cal) {
     severity,
     startedAt: iso(row.from_t ?? row.t),
     detectedAt: iso(num(x.detectedT) ?? row.t),
-    endedAt: row.ongoing ? null : iso(row.t),
+    endedAt: row.ongoing ? null : (drive?.restAt ?? iso(row.t)),
     unit: 'raw',
     beforeValue: beforeMv,
     afterValue: afterMv,
@@ -168,6 +180,7 @@ export function toOpenTeeEvent(row, cal) {
     verdict: row.verdict === 'confirmed' || row.verdict === 'false_alarm' ? row.verdict : null,
     note: row.note ?? '',
     receiptId,
+    ...(drive ? { drive } : {}),
   };
 }
 

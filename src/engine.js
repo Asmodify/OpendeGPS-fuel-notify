@@ -46,6 +46,8 @@ export const BACKEND_ALERT_TYPES = {
   power_restored: { severity: 'info', label: 'Power restored' },
   back_online: { severity: 'info', label: 'Back online' },
   receipt_mismatch: { severity: 'critical', label: 'Receipt mismatch' },
+  drive_rest_soon: { severity: 'warning', label: 'Rest needed soon' },
+  drive_no_rest: { severity: 'critical', label: 'Driving without rest' },
 };
 
 export class HttpError extends Error {

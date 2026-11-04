@@ -51,6 +51,8 @@ export const ALERT_TYPES = {
   sensor_restored: { severity: 'info', label: 'Fuel sensor restored' },
   power_restored: { severity: 'info', label: 'Power restored' },
   back_online: { severity: 'info', label: 'Back online' },
+  drive_rest_soon: { severity: 'warning', label: 'Rest needed soon' },
+  drive_no_rest: { severity: 'critical', label: 'Driving without rest' },
 };
 
 export const DEFAULT_THRESHOLDS = {
@@ -68,6 +70,13 @@ export const DEFAULT_THRESHOLDS = {
   afterHoursStart: '22:00',
   afterHoursEnd: '06:00',
   tzOffsetMinutes: 480, // Asia/Ulaanbaatar; only used for the after-hours window
+  // driving without a rest (driver fatigue): an early warning, the limit, then a reminder for
+  // every further stretch of driving; a stop at least driveRestMinutes long is a rest
+  driveRestEnabled: true,
+  driveWarnMinutes: 270,
+  driveLimitMinutes: 300,
+  driveRestMinutes: 45,
+  driveRemindMinutes: 30,
 };
 
 const DEFAULT_CAL = { emptyMv: 0, fullMv: 10000, tankLiters: null };
@@ -123,6 +132,9 @@ const LEARN_MIN_FACTOR = 0.25; // learned rates below this x the normal rate are
 const RATES_KEEP = 15; // learned trip rates kept per vehicle
 const RATE_PERCENTILE = 0.75; // trip allowance uses this percentile of the learned rates
 const RUN_V_MARGIN_MV = 1000; // engine running = voltage within this of the driving voltage
+const GAP_DRIVE_KMH = 50; // driving time inside a silence = distance / this (the rest of it was a stop)
+const DRIVE_SILENCE_MS = 6 * HOUR; // a longer silence is not judged for driving time
+const ROAD_FACTOR = 1.3; // road distance ~ straight line x this, when the odometer is unknown
 
 function median(values) {
   const a = [...values].sort((x, y) => x - y);
@@ -270,6 +282,7 @@ export class VehicleDetector {
     this.over = null; // { fromT, max, count, alertId }
     this.overCooldownUntil = -Infinity;
     this.afterHoursNight = null;
+    this.drive = null; // driving since the last rest, see checkDriving()
   }
 
   settings() {
@@ -388,6 +401,7 @@ export class VehicleDetector {
     this.checkOverspeed(s, th);
     this.checkAfterHours(s, th);
     this.checkIdle(prev, s, th);
+    this.checkDriving(prev, s, dt, th);
     if (this.v.hasFuel) this.checkFuel(s, dt, powered, th, cal);
   }
 
@@ -847,6 +861,103 @@ export class VehicleDetector {
       const end = idle.offSince ?? s.t;
       this.update(idle.alertId, { ongoing: false, detail: `Engine ran without moving for ${fmtDuration(end - idle.start)}.` });
     }
+  }
+
+  // ---- driving without rest (driver fatigue) -------------------------------------------
+  // Driving time = time moving since the last rest. A rest = the vehicle standing still for at
+  // least driveRestMinutes (engine on or off). Shorter stops (traffic, weighbridge, a queue
+  // that creeps forward) neither reset the count nor add to it. Inside a tracker silence the
+  // driving time is estimated from the distance covered (odometer, else the straight line x
+  // 1.3) at 50 km/h; the rest of the silence was a stop, and a rest if long enough. A silence
+  // of up to 2 h in which the vehicle moved an unknown distance counts as driving (the safe
+  // side); a longer one, or any silence over 6 h, can't be judged and starts the count again.
+  // Alerts: drive_rest_soon at driveWarnMinutes, drive_no_rest at driveLimitMinutes, which
+  // is updated (extra.remind + 1) after every further driveRemindMinutes of driving. Both stay
+  // open (ongoing) until the rest, which closes them with extra.restT = when the rest began.
+  checkDriving(prev, s, dt, th) {
+    if (th.driveRestEnabled === false || !(th.driveLimitMinutes > 0)) {
+      this.drive = null;
+      return;
+    }
+    const restMs = Math.max(5, num(th.driveRestMinutes) ?? 45) * MIN;
+    const moving = s.spd >= DEPART_KMH || (s.spd >= MOVE_KMH && !!prev && prev.spd >= MOVE_KMH);
+    let d = this.drive;
+    if (d && prev) {
+      if (dt <= GAP_MS) {
+        if (prev.spd >= MOVE_KMH && d.stillSince == null) d.movingMs += dt;
+      } else {
+        let km = this.odoKm(prev, s, dt);
+        if (km == null && prev.lat != null && prev.lng != null && s.lat != null && s.lng != null) {
+          km = (distanceM(prev.lat, prev.lng, s.lat, s.lng) * ROAD_FACTOR) / 1000;
+        }
+        let driveMs;
+        if ((km == null && dt > HOLE_MS) || dt > DRIVE_SILENCE_MS) {
+          // a long silence with no idea where the vehicle went, or longer than 6 h (odometers
+          // jump after such gaps): can't be judged either way, so the count starts again
+          this.endDrive(d, null);
+          d = this.drive = null;
+          driveMs = 0;
+        } else if (km == null) driveMs = prev.spd >= MOVE_KMH ? dt : 0;
+        else driveMs = km * 1000 < ODO_STILL_M ? 0 : Math.min(dt, (km / GAP_DRIVE_KMH) * HOUR);
+        if (!d) {
+          /* unknown silence: handled above */
+        } else if (driveMs > 0 && dt - driveMs >= restMs) {
+          // stood still long enough somewhere in the silence: a rest, then driving again
+          this.endDrive(d, prev.t);
+          d = this.drive = { since: s.t - driveMs, movingMs: driveMs, stillSince: null, warnId: null, limitId: null, remind: 0 };
+        } else if (driveMs > 0) {
+          d.movingMs += driveMs;
+          d.stillSince = null;
+        } else if (d.stillSince == null) {
+          d.stillSince = prev.t;
+        }
+      }
+    }
+    if (d && !moving && d.stillSince == null) d.stillSince = s.t;
+    if (d && d.stillSince != null && s.t - d.stillSince >= restMs) {
+      this.endDrive(d, d.stillSince);
+      d = this.drive = null;
+    }
+    if (!d) {
+      if (!moving) return;
+      const rolling = !!prev && prev.spd >= MOVE_KMH && dt <= GAP_MS;
+      d = this.drive = { since: rolling ? prev.t : s.t, movingMs: rolling ? dt : 0, stillSince: null, warnId: null, limitId: null, remind: 0 };
+    }
+    if (moving) d.stillSince = null;
+    const warnMs = (num(th.driveWarnMinutes) ?? 0) * MIN;
+    const limitMs = th.driveLimitMinutes * MIN;
+    const remindMs = (num(th.driveRemindMinutes) ?? 0) * MIN;
+    const rest = fmtDuration(restMs);
+    const driven = fmtDuration(d.movingMs);
+    const driveMin = Math.round(d.movingMs / MIN);
+    if (d.warnId == null && d.limitId == null && warnMs > 0 && warnMs < limitMs && d.movingMs >= warnMs) {
+      d.warnId = this.alert(s, 'drive_rest_soon', 'Rest needed soon',
+        `Driving for ${driven} without a rest of at least ${rest} (limit ${fmtDuration(limitMs)}).`,
+        { fromT: d.since, ongoing: true, driveMin, limitMin: th.driveLimitMinutes, restMin: restMs / MIN });
+    }
+    if (d.limitId == null && d.movingMs >= limitMs) {
+      if (d.warnId != null) this.update(d.warnId, { ongoing: false, driveMin });
+      d.limitId = this.alert(s, 'drive_no_rest', 'Driving without rest',
+        `Driving for ${driven} without a rest of at least ${rest} (limit ${fmtDuration(limitMs)}).`,
+        { fromT: d.since, ongoing: true, driveMin, limitMin: th.driveLimitMinutes, restMin: restMs / MIN, remind: 0, remindT: s.t });
+    } else if (d.limitId != null && remindMs > 0 && d.movingMs >= limitMs + (d.remind + 1) * remindMs) {
+      d.remind = Math.floor((d.movingMs - limitMs) / remindMs);
+      this.update(d.limitId, {
+        detail: `Driving for ${driven} without a rest of at least ${rest} (limit ${fmtDuration(limitMs)}).`,
+        driveMin, remind: d.remind, remindT: s.t,
+      });
+    }
+  }
+
+  // The rest began at restT (null: the tracker went silent too long to tell): the open drive
+  // alerts are closed.
+  endDrive(d, restT) {
+    const driveMin = Math.round(d.movingMs / MIN);
+    const detail = restT == null
+      ? `Drove ${fmtDuration(d.movingMs)}, then the tracker went silent.`
+      : `Drove ${fmtDuration(d.movingMs)} before resting.`;
+    if (d.limitId != null) this.update(d.limitId, { ongoing: false, detail, driveMin, restT });
+    else if (d.warnId != null) this.update(d.warnId, { ongoing: false, detail, driveMin, restT });
   }
 
   // ---- fuel ----------------------------------------------------------------------------

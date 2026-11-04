@@ -46,6 +46,8 @@ export const TYPE_LABELS = {
   power_restored: 'Тэжээл сэргэсэн',
   back_online: 'Дахин холбогдсон',
   receipt_mismatch: 'Баримт зөрсөн',
+  drive_rest_soon: 'Удахгүй амрах шаардлагатай',
+  drive_no_rest: 'Амралтгүй жолоодсон',
 };
 /** alertTypes map ({ type: { severity, label } }) with Mongolian labels. */
 export function mnAlertTypes(types) {
@@ -83,6 +85,8 @@ const TITLES = {
   'Possible fuel drop — checking (5 h)': 'Түлш буурсан байж болзошгүй — шалгаж байна (5 ц)',
   'False alarm — fuel sensor misreading (level came back)': 'Худал дохио — мэдрэгчийн алдаа (түвшин буцаж сэргэсэн)',
   'Test notification': 'Туршилтын мэдэгдэл',
+  'Rest needed soon': 'Удахгүй амрах шаардлагатай',
+  'Driving without rest': 'Амралтгүй жолоодсон',
 };
 const TITLE_PATTERNS = [
   [/^Receipt (.+?), tank got (.+)$/, 'Баримт $1, савд $2 орсон'],
@@ -148,6 +152,10 @@ const DETAIL_PATTERNS = [
   [/Moving at (\d+) km\/h at (.+?) \(after-hours window (.+?)\)\./g, '$2 үед $1 км/ц хурдтай явсан (ажлын бус цаг $3).'],
   [/Engine running without moving for (.+?)\./g, 'Хөдөлгүүр $1 хугацаанд хөдлөхгүйгээр асаалттай байна.'],
   [/Engine ran without moving for (.+?)\./g, 'Хөдөлгүүр $1 хугацаанд хөдлөхгүйгээр асаалттай байсан.'],
+  // ---- driving without rest (detector.js) ----
+  [/Driving for (.+?) without a rest of at least (.+?) \(limit (.+?)\)\./g, '$2-аас доошгүй амралтгүйгээр $1 жолоодож байна (хязгаар $3).'],
+  [/Drove (.+?) before resting\./g, 'Амрахаасаа өмнө $1 жолоодсон.'],
+  [/Drove (.+?), then the tracker went silent\./g, '$1 жолоодсоны дараа трекер мэдээлэл илгээхээ больсон.'],
   // ---- fuel level and sensor (detector.js) ----
   [/Fuel is down to (.+?) \(alert below (\d+)%\)\./g, 'Түлш $1 болж багассан ($2%-иас доош бол анхааруулна).'],
   [/Fuel sensor reads normally again \((\d+) mV\) after (.+?) without a valid signal\./g,
