@@ -1558,7 +1558,7 @@ export class Engine {
     const cal = imei ? this.vehicleCal(imei) : null;
     const th = imei ? this.settingsFor(imei).th : this.thresholds();
     const x = parseExtra(row.extra);
-    const t = row.t;
+    const t = eventEnd(row, x);
     const t0 = Number.isFinite(row.from_t) && row.from_t < t ? row.from_t : t;
     // the chart: the event with a margin either side (more for long events, up to 12 h)
     const pad = clamp((t - t0) * 0.4, 3 * HOUR, 12 * HOUR);
@@ -1691,7 +1691,7 @@ export class Engine {
     const x = parseExtra(row.extra);
     const cal = this.vehicleCal(row.imei);
     const th = this.settingsFor(row.imei).th;
-    const t = row.t;
+    const t = eventEnd(row, x);
     const t0 = Number.isFinite(row.from_t) && row.from_t < t ? row.from_t : t;
     if (row.type === 'receipt_mismatch') {
       const r = this.receiptsStored().find((rc) => rc.id === x.receiptId);
@@ -1977,6 +1977,16 @@ function motionIndex(rows, thr24, thr12) {
       return mov[j] - mov[i] < 2 * MIN && eng[j] - eng[i] < 15 * MIN && dist[j] - dist[i] < 300;
     },
   };
+}
+
+/** When the fuel event itself ended: a drop held back for DRAIN_CONFIRM_MS is re-dated to its
+ *  confirmation (so the dashboard shows it as new), and its detection time kept as detectedT.
+ *  The meter check and the evidence page must measure up to the detection, not the confirmation:
+ *  hours of driving in between would count the road's burn as part of the drop (1472УЕУ,
+ *  2026-11-03: 24 L at a stop shown as 98.5 L). */
+function eventEnd(row, x = parseExtra(row.extra)) {
+  const d = num(x.detectedT);
+  return Number.isFinite(d) && d <= row.t ? d : row.t;
 }
 
 function receiptOf(extra) {

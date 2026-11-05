@@ -194,6 +194,10 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
   const drivingAt = (i) => moving(rows[i]) && ((i > 0 && moving(rows[i - 1])) || (i + 1 < rows.length && moving(rows[i + 1])));
   // how long the truck had been standing at each reading (since its last driving reading: any
   // move, however short, sets the fuel sloshing again)
+  // the readings of real driving (a lone moving reading at a stop is GPS jitter or creeping up to
+  // the pump: neither burns road fuel, so the burn ceiling does not count it as driving)
+  const driving = new Set();
+  for (let i = 0; i < rows.length; i++) if (drivingAt(i)) driving.add(rows[i]);
   const stood = new Array(rows.length);
   let lastDrive = -Infinity;
   for (let i = 0; i < rows.length; i++) {
@@ -284,7 +288,7 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
         else if (running(p) || running(s)) silentIdleMs += dt;
         continue;
       }
-      if (moving(p) || moving(s)) { movingMs += dt; km += legKm(p, s); } else if (running(p)) idleMs += dt;
+      if (driving.has(p) || driving.has(s)) { movingMs += dt; km += legKm(p, s); } else if (running(p)) idleMs += dt;
     }
     const h = (ms) => ms / HOUR;
     const liters = Math.max(BURN.perKm * km, BURN.perHourMoving * h(movingMs)) + BURN.idle * h(idleMs + silentIdleMs) + BURN.silentMoved * h(silentMovedMs);
@@ -359,7 +363,11 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
   }
 
   const pre = nearStill(t0, -1);
-  const post = nearStill(t, 1);
+  // after: the settled readings from the detection on; when the truck drove off before any (the
+  // tracker reports seldom at a stop), the settled readings at the same stop after the fall began
+  // and before the detection: the level the fall left, read standing still
+  let post = nearStill(t, 1);
+  if (!post.length && t > t0) post = nearStill(t, -1).filter((s) => s.t > t0);
   // a side with no settled standing reading: a sensor steady on the move gives its level from
   // the nearest drive instead (marked moving)
   const preM = pre.length ? null : steadyMoving(t0, -1);
@@ -388,8 +396,21 @@ export function meterCheck({ kind, rows, t0, t, amountL = null, amountMv = null,
   // the allowance for a level read on the move when the other side's was read at rest (two
   // levels on the move sit off by the same amount, so none then)
   const burn = hasL ? burnOf(a, b) : null;
+  // a level read on the move that the stop itself agrees with: a reading at the stop after the
+  // fuel settled (SETTLE since the last drive) but one that a lone GPS jump marks as moving, so
+  // nearStill passed it over. Then the level at rest is known and the move bias does not apply.
+  // (A reading in the first minutes of the stop never backs it: that may be sloshing.)
+  const backed = (lv, edge, dir) => {
+    if (!lv?.moving) return false;
+    for (let i = dir < 0 ? lastIdx(rows, edge) : firstIdx(rows, edge); i >= 0 && i < rows.length; i += dir) {
+      if (drivingAt(i) || big[i] || Math.abs(rows[i].t - edge) > LOOK) break;
+      if (valid(rows[i]) && stood[i] >= SETTLE && Math.abs(val(rows[i].f) - lv.v) <= STEADY) return true;
+    }
+    return false;
+  };
   if (burn) {
-    burn.moveBias = !!before?.moving !== !!after?.moving && full ? round1(full * MOVE_BIAS) : 0;
+    const oneMoving = !!before?.moving !== !!after?.moving && !backed(before, t0, -1) && !backed(after, t, 1);
+    burn.moveBias = oneMoving && full ? round1(full * MOVE_BIAS) : 0;
     burn.total = round1(burn.liters + burn.moveBias);
   }
   const allow = burn ? burn.total : 0;
