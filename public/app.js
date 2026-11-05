@@ -28,16 +28,18 @@ const FALLBACK_TYPES = {
   receipt_mismatch: { severity: 'critical', label: 'Баримт зөрсөн' },
   drive_rest_soon: { severity: 'warning', label: 'Удахгүй амрах шаардлагатай' },
   drive_no_rest: { severity: 'critical', label: 'Амралтгүй жолоодсон' },
+  auto_check: { severity: 'critical', label: 'Автомат шалгалт' },
 };
 const TYPE_ICON = {
   fuel_drain: 'drop-down', refuel: 'drop-up', power_cut: 'bolt-off', power_restored: 'bolt', sensor_lost: 'sensor-off',
   sensor_restored: 'sensor', low_fuel: 'fuel', long_idle: 'clock', overspeed: 'gauge', offline: 'wifi-off',
   back_online: 'wifi', server_event: 'server', after_hours: 'moon', receipt_mismatch: 'sheet',
-  drive_rest_soon: 'clock', drive_no_rest: 'clock',
+  drive_rest_soon: 'clock', drive_no_rest: 'clock', auto_check: 'evidence',
 };
 // Owner's verdict on a fuel drain (saved in the Excel fuel ledger)
 const VERDICTS = { unchecked: 'Шалгаагүй', confirmed: 'Хулгай батлагдсан', false_alarm: 'Худал дохио' };
 const LEDGER_TYPES = ['refuel', 'fuel_drain'];
+const REVIEW_TYPES = [...LEDGER_TYPES, 'auto_check']; // cards a person marks or notes
 const NOTE_MAX = 500;
 const STATUS = {
   moving: { label: 'Явж байна', long: 'Одоо явж байна', order: 0 },
@@ -1426,7 +1428,7 @@ function alertItem(a, { compact = false } = {}) {
         ${span ? html`<span class="muted">· ${fmtDur(span)} хугацаанд</span>` : ''}
       </div>
       ${a.detail ? html`<div class="al-detail">${a.detail}</div>` : ''}
-      ${LEDGER_TYPES.includes(a.type) ? reviewControls(a) : ''}
+      ${REVIEW_TYPES.includes(a.type) ? reviewControls(a) : ''}
     </div>
     ${amt ? html`<div class="al-amt t-${a.type}"><b>${sign}${amt.main}</b><small>${amt.sub}</small></div>` : html`<div class="al-amt"></div>`}
     <div class="al-act">${a.acked
@@ -1438,7 +1440,7 @@ function alertItem(a, { compact = false } = {}) {
 /** Verdict buttons (fuel drains) and a note field on refuel / fuel drain alerts; both are saved
  *  on the server and written to the Excel fuel ledger. */
 function reviewControls(a) {
-  const drain = a.type === 'fuel_drain';
+  const drain = a.type === 'fuel_drain' || a.type === 'auto_check';
   const vb = (v, label, title) => html`<button type="button" class="js-verdict v-${v}" data-id="${a.id}" data-v="${v}" aria-pressed="${String(a.verdict === v)}" title="${title}">${label}</button>`;
   return html`<div class="al-review" data-id="${a.id}">
     ${drain ? html`<div class="seg small verdict-seg" role="group" aria-label="Таны дүгнэлт">
