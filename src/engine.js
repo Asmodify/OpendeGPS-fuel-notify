@@ -61,6 +61,7 @@ export class HttpError extends Error {
 }
 const bad = (msg) => new HttpError(400, msg);
 const AUTOCHECK_KEY = 'autocheck';
+const AUTOCHECK_CATCHUP_DAYS = 7;
 
 function hashStr(s) {
   let h = 5381;
@@ -1733,14 +1734,21 @@ export class Engine {
     const local = new Date(now + this.tzOffsetMin * MIN);
     if (local.getUTCHours() < 1 || !this.historyReady) return null;
     const day = new Date(now + this.tzOffsetMin * MIN - DAY).toISOString().slice(0, 10);
-    if (this.db.getSetting(AUTOCHECK_KEY, null) >= day) return null;
+    const last = this.db.getSetting(AUTOCHECK_KEY, null);
+    if (last >= day) return null;
     this.db.setSetting(AUTOCHECK_KEY, day);
-    try {
-      return this.runAutoCheck(day, now);
-    } catch (e) {
-      log('error', 'Automatic check failed:', e);
-      return 0;
+    // the first run ever also checks the week before (the sensor streak needs past days)
+    const days = [];
+    for (let k = last ? 1 : AUTOCHECK_CATCHUP_DAYS; k >= 1; k--) days.push(new Date(now + this.tzOffsetMin * MIN - k * DAY).toISOString().slice(0, 10));
+    let n = 0;
+    for (const d of days) {
+      try {
+        n += this.runAutoCheck(d, now);
+      } catch (e) {
+        log('error', `Automatic check of ${d} failed:`, e);
+      }
     }
+    return n;
   }
 
   runAutoCheck(day, now = Date.now()) {
