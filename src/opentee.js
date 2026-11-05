@@ -14,12 +14,21 @@
 // being checked (the 5 h hold) is sent once it is settled. OPENTEE_RESEND=1 sends everything
 // again from the start (e.g. after trucks were added to Open Tee).
 //
+// The fuel level of every truck with a sensor goes the same way every 5 minutes (POST
+// /api/v1/integrations/fuel-warner/levels): the level the monitor shows now, whether the sensor
+// works, and the trusted levels since the last send (levels table) for the app's fuel line. The
+// driver app reads its truck's fuel from there, so it shows the same number as this monitor.
+//
 // Refuel receipts drivers upload in the Open Tee app come the other way: they are added to this
 // program's receipt list, checked against the refuels the fuel sensor saw (receipts.js), and the
 // result - how much went into the tank, how much is missing - is sent back to the API, where the
 // admin web's fuel ledger shows it.
+//
+// The named places the office keeps on the admin page Газрууд (our НАБТ, fuel stations, border
+// ports, mines...) are fetched every 10 minutes and kept in the meta table, so the dashboard map
+// can label them even while the API is unreachable.
 import crypto from 'node:crypto';
-import { log, errText, num, round, shortName } from './util.js';
+import { log, errText, num, round, shortName, clamp } from './util.js';
 import { parseExtra, isPendingDrain, ledgerEntry, litersAt, fuelEventLitres } from './ledger.js';
 import { mnTitle, mnDetail } from './mn.js';
 import { RECEIPTS_KEY, RECEIPTS_MAX } from './receipts.js';
@@ -33,6 +42,17 @@ const TIMEOUT_MS = 30 * 1000;
 const RECEIPTS_PATH = '/api/v1/integrations/fuel-warner/receipts';
 const CHECKS_PATH = '/api/v1/integrations/fuel-warner/receipt-checks';
 const RECEIPT_CURSOR_KEY = 'opentee.receiptCursor';
+const PLACES_PATH = '/api/v1/integrations/fuel-warner/places';
+const PLACES_KEY = 'opentee.places';
+const PLACES_EVERY_MS = 10 * 60 * 1000;
+const LEVELS_PATH = '/api/v1/integrations/fuel-warner/levels';
+const LEVELS_CURSOR_KEY = 'opentee.levelsCursor'; // t (ms) of the last trusted level sent
+const LEVELS_EVERY_MS = 5 * 60 * 1000;
+const LEVELS_FIRST_MS = 7 * 24 * 3600 * 1000; // the first send starts this far back
+const LEVELS_ROWS = 20000; // trusted levels read per send
+const LEVELS_BATCH = 20; // trucks per call (the first send carries up to 7 days of levels each)
+const PLACES_MAX = 500;
+const PLACE_KINDS = ['base', 'fuel', 'terminal', 'border', 'mine', 'parking', 'other'];
 const CHECKS_KEY = 'opentee.receiptChecks'; // { entryId: what was last sent }
 const NO_TRACKER_KEY = 'opentee.receiptsNoTracker'; // receipts for vehicles without a known tracker
 // a driver may upload the receipt hours after filling up: the receipt is matched to a refuel on
@@ -55,7 +75,10 @@ const TYPE_MAP = {
   long_idle: 'LONG_IDLE',
   overspeed: 'OVERSPEED',
   receipt_mismatch: 'RECEIPT_MISMATCH',
+  drive_rest_soon: 'DRIVE_REST_SOON',
+  drive_no_rest: 'DRIVE_NO_REST',
 };
+const DRIVE_TYPES = new Set(['drive_rest_soon', 'drive_no_rest']);
 export const OPENTEE_TYPES = Object.keys(TYPE_MAP);
 
 /** Settings from cfg.openTee and the environment. */
@@ -118,9 +141,21 @@ export function toOpenTeeEvent(row, cal) {
     deltaL = missing === null ? null : round(-missing, 1);
     const id = String(x.receiptId || '');
     receiptId = id.startsWith('ot-') ? id.slice(3) : null;
+    // the tank before and after the fill the receipt was matched to
+    beforeL = num(x.beforeL) === null ? null : round(num(x.beforeL), 1);
+    afterL = num(x.afterL) === null ? null : round(num(x.afterL), 1);
   }
   const title = mnTitle(row.title || '');
   const detail = mnDetail(row.detail || '');
+  // driving without rest: how long, how many reminders, and when the rest began
+  const drive = DRIVE_TYPES.has(row.type) ? {
+    driveMinutes: num(x.driveMin),
+    limitMinutes: num(x.limitMin),
+    restMinutes: num(x.restMin),
+    reminder: num(x.remind) ?? 0,
+    reminderAt: iso(num(x.remindT)),
+    restAt: row.ongoing ? null : iso(num(x.restT)),
+  } : null;
   return {
     // the alert key is stable even if the local database is rebuilt; hashed so it carries no IMEI
     id: crypto.createHash('sha256').update(String(row.key)).digest('hex').slice(0, 40),
@@ -130,7 +165,7 @@ export function toOpenTeeEvent(row, cal) {
     severity,
     startedAt: iso(row.from_t ?? row.t),
     detectedAt: iso(num(x.detectedT) ?? row.t),
-    endedAt: row.ongoing ? null : iso(row.t),
+    endedAt: row.ongoing ? null : (drive?.restAt ?? iso(row.t)),
     unit: 'raw',
     beforeValue: beforeMv,
     afterValue: afterMv,
@@ -145,6 +180,7 @@ export function toOpenTeeEvent(row, cal) {
     verdict: row.verdict === 'confirmed' || row.verdict === 'false_alarm' ? row.verdict : null,
     note: row.note ?? '',
     receiptId,
+    ...(drive ? { drive } : {}),
   };
 }
 
@@ -195,6 +231,56 @@ export function toReceiptCheck(r) {
 
 const checkHash = (c) => JSON.stringify(c);
 
+/** A place from the API -> the shape kept here and served to the dashboard, or null when unusable. */
+export function toWarnerPlace(x) {
+  const lat = Number(x?.lat);
+  const lng = Number(x?.lng);
+  const name = typeof x?.name === 'string' ? x.name.trim().slice(0, 120) : '';
+  if (!name || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  const radiusM = Number(x.radiusM);
+  return {
+    id: String(x.id ?? `${lat},${lng}`),
+    name,
+    kind: PLACE_KINDS.includes(x.kind) ? x.kind : 'other',
+    lat,
+    lng,
+    radiusM: Number.isFinite(radiusM) && radiusM > 0 ? Math.min(radiusM, 20000) : 300,
+    checked: x.checked !== false,
+  };
+}
+
+/** Litres and percent of a sensor reading, the way the monitor's vehicle list counts them. */
+export function levelOf(engine, mv, cal) {
+  const liters = litres(mv, cal);
+  let percent = null;
+  if (cal?.table && cal?.tankLiters && liters !== null) percent = clamp((liters / cal.tankLiters) * 100, 0, 100);
+  else if (typeof engine.fuelPct === 'function') percent = num(engine.fuelPct(mv, cal));
+  return { mv: round(mv), liters, percent: percent === null ? null : round(percent, 1) };
+}
+
+/**
+ * The level message of one truck: the monitor's current reading (vehicleView().fuel) plus the
+ * trusted levels since the last send. Null for a truck without a fuel sensor or with nothing to say.
+ */
+export function toOpenTeeLevel(view, points, engine) {
+  const f = view?.fuel;
+  if (!view?.imei || !view.hasFuel || !f) return null;
+  const cal = view.cal || engine.vehicleCal(view.imei);
+  const pts = (points || []).map((p) => ({ t: iso(p.t), ...levelOf(engine, p.mv, cal) })).filter((p) => p.t);
+  if (f.mv === null && f.sensorOk !== false && !pts.length) return null;
+  return {
+    imei: String(view.imei),
+    at: iso(f.trustedAt),
+    mv: f.mv,
+    liters: f.liters,
+    percent: f.pct,
+    healthy: f.sensorOk !== false,
+    fault: f.fault?.short || null,
+    tankLiters: num(cal?.tankLiters),
+    points: pts,
+  };
+}
+
 export class OpenTeeLink {
   /** @param {{cfg: object, engine: object, db: object, fetchImpl?: Function}} o */
   constructor({ cfg, engine, db, fetchImpl = globalThis.fetch }) {
@@ -205,8 +291,11 @@ export class OpenTeeLink {
     this.timer = null;
     this.running = null;
     this.pauseUntil = 0;
+    this.placesAt = 0;
+    this.levelsAt = 0;
     this.lastError = null;
     this.status = { enabled: this.settings.enabled, url: this.settings.url, sent: 0, lastOkAt: null, lastError: null, lastErrorAt: null, unmatched: [] };
+    this.newLevels = db.db.prepare(`SELECT imei, t, mv FROM levels WHERE t > ? ORDER BY t LIMIT ${LEVELS_ROWS}`);
     const types = OPENTEE_TYPES.map(() => '?').join(',');
     this.changed = db.db.prepare(
       `SELECT * FROM alerts WHERE type IN (${types}) AND (updated_at > ? OR (updated_at = ? AND id > ?)) ORDER BY updated_at, id LIMIT ${BATCH}`,
@@ -245,6 +334,8 @@ export class OpenTeeLink {
       await this.sendEvents();
       await this.pullReceipts();
       await this.pushReceiptChecks();
+      await this.pullPlaces();
+      await this.sendLevels();
     } catch (e) {
       const msg = errText(e);
       this.status.lastError = msg;
@@ -379,6 +470,69 @@ export class OpenTeeLink {
       for (const c of batch) sentHashes[c.id] = checkHash(c);
       this.store.setMeta(CHECKS_KEY, JSON.stringify(sentHashes));
     }
+  }
+
+  // ---- fuel levels for the driver app ---------------------------------------------------
+
+  /** Sends every truck's fuel level every LEVELS_EVERY_MS. An API without the route (older server) is skipped for an hour. */
+  async sendLevels(now = Date.now()) {
+    if (now - this.levelsAt < LEVELS_EVERY_MS) return;
+    this.levelsAt = now;
+    const stored = Number(this.store.getMeta(LEVELS_CURSOR_KEY));
+    const cursor = Number.isFinite(stored) && stored > now - LEVELS_FIRST_MS ? stored : now - LEVELS_FIRST_MS;
+    const rows = this.newLevels.all(cursor);
+    const byImei = new Map();
+    for (const r of rows) {
+      if (!byImei.has(r.imei)) byImei.set(r.imei, []);
+      byImei.get(r.imei).push(r);
+    }
+    const levels = [];
+    for (const rec of this.engine.recs?.values() || []) {
+      const lv = toOpenTeeLevel(this.engine.vehicleView(rec, null, now), byImei.get(rec.imei), this.engine);
+      if (lv) levels.push(lv);
+    }
+    try {
+      for (let i = 0; i < levels.length; i += LEVELS_BATCH) {
+        await this.request('POST', LEVELS_PATH, { levels: levels.slice(i, i + LEVELS_BATCH) });
+      }
+    } catch (e) {
+      if (e.status === 404) {
+        this.levelsAt = now + 55 * 60 * 1000;
+        return;
+      }
+      throw e;
+    }
+    // a full read may have cut trucks sharing the last time: read that millisecond again next time
+    // (the API stores each level once)
+    const last = rows.length ? rows[rows.length - 1].t : null;
+    if (last !== null) this.store.setMeta(LEVELS_CURSOR_KEY, String(rows.length === LEVELS_ROWS ? last - 1 : last));
+  }
+
+  // ---- named places for the map ---------------------------------------------------------
+
+  /** Fetches the named places every PLACES_EVERY_MS. An API without the list (older server) is skipped for an hour. */
+  async pullPlaces(now = Date.now()) {
+    if (now - this.placesAt < PLACES_EVERY_MS) return;
+    this.placesAt = now;
+    let body;
+    try {
+      body = await this.request('GET', PLACES_PATH);
+    } catch (e) {
+      if (e.status === 404 || e.status === 503) {
+        this.placesAt = now + 50 * 60 * 1000;
+        return;
+      }
+      throw e;
+    }
+    if (!Array.isArray(body?.places)) return;
+    const list = body.places.map(toWarnerPlace).filter(Boolean).slice(0, PLACES_MAX);
+    this.store.setMeta(PLACES_KEY, JSON.stringify(list));
+  }
+
+  /** The places last fetched (an empty list until the first fetch). */
+  places() {
+    const list = this.metaJson(PLACES_KEY, []);
+    return Array.isArray(list) ? list : [];
   }
 
   tzMin() {

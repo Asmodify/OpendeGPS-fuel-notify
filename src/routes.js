@@ -81,6 +81,7 @@ const SSO_DAYS = 15;
 const LOGIN_MAX_FAILS = 10; // per IP within LOGIN_WINDOW_MS
 const LOGIN_WINDOW_MS = 15 * 60e3;
 const digest = (x) => crypto.createHash('sha256').update(String(x)).digest();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const sameSecret = (a, b) => typeof a === 'string' && typeof b === 'string' && !!a && !!b && crypto.timingSafeEqual(digest(a), digest(b));
 
 function cookieOf(req, name) {
@@ -110,17 +111,20 @@ function makeAuth(cfg) {
   };
   return {
     cookie: (value, maxAge) => `${COOKIE}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure}`,
-    /** readOnly: the accountant (views only, as in the admin web). */
-    make(now = Date.now(), seconds = SESSION_DAYS * 86400, readOnly = false) {
+    /** readOnly: the accountant (views only, as in the admin web). userId: the admin web
+     *  user behind an admin web sign-in (rechecked with the API), null for the password.
+     *  "ftw2": cookies made before the recheck existed are no longer accepted. */
+    make(now = Date.now(), seconds = SESSION_DAYS * 86400, readOnly = false, userId = null) {
       const exp = Math.floor(now / 1000) + seconds;
-      const body = readOnly ? `${exp}.r` : String(exp);
-      return `${body}.${hmac(`ftw1.${body}`)}`;
+      const uid = UUID.test(String(userId || '')) ? String(userId).toLowerCase() : null;
+      const body = `${exp}${readOnly ? '.r' : ''}${uid ? `.u${uid}` : ''}`;
+      return `${body}.${hmac(`ftw2.${body}`)}`;
     },
-    /** null when not signed in, else { readOnly }. */
+    /** null when not signed in, else { readOnly, userId }. */
     session(req, now = Date.now()) {
-      const m = /^((\d{9,12})(\.r)?)\.([A-Za-z0-9_-]{43})$/.exec(String(cookieOf(req, COOKIE) || ''));
-      if (!m || Number(m[2]) * 1000 <= now || !sameSecret(m[4], hmac(`ftw1.${m[1]}`))) return null;
-      return { readOnly: !!m[3] };
+      const m = /^((\d{9,12})(\.r)?(?:\.u([0-9a-f-]{36}))?)\.([A-Za-z0-9_-]{43})$/.exec(String(cookieOf(req, COOKIE) || ''));
+      if (!m || Number(m[2]) * 1000 <= now || !sameSecret(m[5], hmac(`ftw2.${m[1]}`))) return null;
+      return { readOnly: !!m[3], userId: m[4] || null };
     },
     check(ip, pw, now = Date.now()) {
       const list = throttle(ip, now);
@@ -141,9 +145,13 @@ function makeAuth(cfg) {
 
 // Admin web roles that see the fuel monitor (HR and drivers do not, as in the admin web menu).
 const ADMIN_WEB_ROLES = new Set(['superadmin', 'company_admin', 'dispatcher', 'accountant', 'mechanic']);
+// The API's rule (services/fuelMonitorAccess.js) is asked again this often per signed-in user.
+const STAFF_RECHECK_MS = 5 * 60e3;
 
 /** The admin web user behind `token` (checked once with the Open Teever API), or null.
- *  Only staff of `companyIds` get in (a superadmin always): the monitor shows the whole fleet. */
+ *  Only Open Development's own staff get in: the API answers fuelMonitor true/false (one
+ *  rule for the admin menu and here). An older API without that answer falls back to the
+ *  check below: staff of `companyIds`, or a superadmin. */
 export async function adminWebUser(apiUrl, token, companyIds = [], fetchFn = fetch) {
   if (typeof token !== 'string' || token.length < 20 || token.length > 4096 || !/^[\w.~+/=-]+$/.test(token)) return null;
   try {
@@ -153,13 +161,33 @@ export async function adminWebUser(apiUrl, token, companyIds = [], fetchFn = fet
     });
     if (!res.ok) return null;
     const user = (await res.json())?.data;
+    if (user?.fuelMonitor === false) return null;
     const roles = [user?.role, ...(Array.isArray(user?.roles) ? user.roles : [])].filter((r) => ADMIN_WEB_ROLES.has(r));
     if (!roles.length) return null;
     const superadmin = roles.includes('superadmin');
     const company = String(user?.companyId || user?.company_id || '').toLowerCase();
-    if (!superadmin && !(company && companyIds.includes(company))) return null;
+    if (user?.fuelMonitor !== true && !superadmin && !(company && companyIds.includes(company))) return null;
     // Several roles: the strongest one decides; only a pure accountant is read-only.
     return { id: user._id || user.id || null, readOnly: roles.every((r) => r === 'accountant') };
+  } catch {
+    return null;
+  }
+}
+
+/** Asks the API whether admin web user `id` may still use the monitor (deactivated, moved
+ *  to another company, role changed). { allowed, readOnly }, or null when the API cannot
+ *  answer (down, older version): then the session goes on until the next check. */
+export async function staffStillAllowed(settings, id, fetchFn = fetch) {
+  if (!settings?.enabled || !UUID.test(String(id || ''))) return null;
+  try {
+    const res = await fetchFn(`${settings.url}/api/v1/integrations/fuel-warner/staff/${encodeURIComponent(id)}`, {
+      headers: { authorization: `Bearer ${settings.key}`, accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json())?.data;
+    if (typeof data?.allowed !== 'boolean') return null;
+    return { allowed: data.allowed, readOnly: data.readOnly !== false };
   } catch {
     return null;
   }
@@ -182,13 +210,31 @@ const intParam = (v) => {
 };
 const listParam = (v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined);
 
-export function createHandler({ cfg, engine, poller, notifier, hub, ledger, lookupAdminWeb }) {
+export function createHandler({ cfg, engine, poller, notifier, hub, ledger, lookupAdminWeb, openTee, checkStaff }) {
   const publicDir = path.resolve(cfg.publicDir);
   const loopbackOnly = ['127.0.0.1', 'localhost', '::1'].includes(cfg.host);
   const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
   const auth = makeAuth(cfg);
-  const apiUrl = openTeeSettings(cfg).url;
+  const linkSettings = openTeeSettings(cfg);
+  const apiUrl = linkSettings.url;
+  // named refuel places for the export: config.local.json first, then the fuel stations from the
+  // admin web's Газрууд page
+  const refuelPlaces = () => [
+    ...(Array.isArray(cfg.refuelPlaces) ? cfg.refuelPlaces : []),
+    ...(openTee?.places() ?? []).filter((x) => x.kind === 'fuel').map(({ name, lat, lng, radiusM }) => ({ name, lat, lng, radiusM })),
+  ];
   const lookup = lookupAdminWeb || ((token) => adminWebUser(apiUrl, token, cfg.ssoCompanyIds || []));
+  const recheck = checkStaff || ((id) => staffStillAllowed(linkSettings, id));
+  const staffChecks = new Map(); // userId -> { at, result }
+  async function staffAccess(userId, now = Date.now()) {
+    const hit = staffChecks.get(userId);
+    if (hit && now - hit.at < STAFF_RECHECK_MS) return hit.result;
+    // No answer (API down or older): keep the last answer until the next try.
+    const result = (await recheck(userId)) ?? hit?.result ?? null;
+    if (staffChecks.size > 5000) staffChecks.clear();
+    staffChecks.set(userId, { at: now, result });
+    return result;
+  }
   const onServer = process.platform !== 'win32';
 
   function guard(req, url) {
@@ -233,12 +279,20 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger, look
       if (m === 'POST' && p === '/api/sso') {
         const body = await readJson(req, 8192);
         const user = await auth.checkAdminWeb(clientIp(req, cfg.trustProxy), body?.token, lookup);
-        if (!user) throw new HttpError(401, 'Админ вебийн нэвтрэлт хүчингүй байна');
-        return send(res, 200, { ok: true, readOnly: user.readOnly }, { 'set-cookie': auth.cookie(auth.make(Date.now(), SSO_DAYS * 86400, user.readOnly), SSO_DAYS * 86400) });
+        if (!user) throw new HttpError(401, 'Энэ хяналтад зөвхөн Опендевелопмент ХХК-ийн ажилтан нэвтэрнэ');
+        return send(res, 200, { ok: true, readOnly: user.readOnly }, { 'set-cookie': auth.cookie(auth.make(Date.now(), SSO_DAYS * 86400, user.readOnly, user.id), SSO_DAYS * 86400) });
       }
       if (m === 'POST' && p === '/api/logout') return send(res, 200, { ok: true }, { 'set-cookie': auth.cookie('', 0) });
       const session = auth.session(req);
       if (!session) return send(res, 401, { error: 'login_required' });
+      if (session.userId) {
+        // An admin web sign-in lasts only while the API still counts the person as our staff.
+        const access = await staffAccess(session.userId);
+        if (access && !access.allowed) {
+          return send(res, 401, { error: 'login_required' }, { 'set-cookie': auth.cookie('', 0) });
+        }
+        if (access) session.readOnly = access.readOnly;
+      }
       if (session.readOnly && m !== 'GET' && m !== 'HEAD') throw new HttpError(403, 'Нягтлан зөвхөн харах эрхтэй');
     }
 
@@ -257,6 +311,8 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger, look
     }
     if (m === 'GET' && p === '/api/status') return send(res, 200, poller.statusView());
     if (m === 'GET' && p === '/api/vehicles') return send(res, 200, engine.vehiclesView());
+    // named places for the map, from the admin web's Газрууд page (opentee.js)
+    if (m === 'GET' && p === '/api/places') return send(res, 200, { places: openTee?.places() ?? [] });
     if (seg[0] === 'vehicles' && seg[1]) {
       const imei = seg[1];
       const rec = engine.recs.get(imei);
@@ -291,7 +347,7 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger, look
       const info = { filter, alertTypes: engine.alertTypes, vehicleName, now, tzOffsetMinutes: engine.tzOffsetMin };
       const fillSpots = refuelFillSpots(alerts, (imei, from, to) => engine.db.samplesRange(imei, from, to));
       const { buildXlsx } = await import('./xlsx.js');
-      const sheets = buildAlertSheets({ ...info, alerts, timezone: cfg.timezone, limited, fillSpots, refuelPlaces: cfg.refuelPlaces });
+      const sheets = buildAlertSheets({ ...info, alerts, timezone: cfg.timezone, limited, fillSpots, refuelPlaces: refuelPlaces() });
       const buf = buildXlsx(sheets, alertsXlsxOpts(engine.tzOffsetMin));
       res.writeHead(200, {
         'content-type': XLSX_TYPE,

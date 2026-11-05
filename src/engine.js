@@ -7,6 +7,7 @@ import { ledgerEntry, litersAt, fuelPct, amountLitres, fuelEventLitres, isPendin
 import { gpsFault, fuelSensorState, fuelFaultInfo, buildFleetStatusSheets } from './fleetstatus.js';
 import { validPos } from './refuelplaces.js';
 import { meterCheck, CONFIRMS, probeFault } from './meter.js';
+import { gapCases, roomCases, sensorDay, sensorCase, dayBalance, balanceCase, transferCases, afterfillCases } from './autocheck.js';
 import { mnTitle, mnDetail, mnAlertTypes } from './mn.js';
 import { odoStepOk, motionStatsOf, sliceByTime } from './motion.js';
 import {
@@ -21,6 +22,7 @@ const SEVERITIES = ['critical', 'warning', 'info'];
 const HOUR = 3600e3;
 const SUMMARY_LONG_TTL = 10 * 60e3; // see alertsChangedForSummary
 const MIN = 60e3;
+const DAY = 24 * HOUR;
 const DRAIN_CONFIRM_MS = 5 * HOUR; // a fuel drop must stay down this long before it is alerted
 const PENDING_TITLE = 'Possible fuel drop — checking (5 h)';
 const FALSE_ALARM_TITLE = 'False alarm — fuel sensor misreading (level came back)';
@@ -44,8 +46,11 @@ export const BACKEND_ALERT_TYPES = {
   refuel: { severity: 'info', label: 'Refuel' },
   sensor_restored: { severity: 'info', label: 'Fuel sensor restored' },
   power_restored: { severity: 'info', label: 'Power restored' },
+  auto_check: { severity: 'critical', label: 'Automatic check' },
   back_online: { severity: 'info', label: 'Back online' },
   receipt_mismatch: { severity: 'critical', label: 'Receipt mismatch' },
+  drive_rest_soon: { severity: 'warning', label: 'Rest needed soon' },
+  drive_no_rest: { severity: 'critical', label: 'Driving without rest' },
 };
 
 export class HttpError extends Error {
@@ -55,6 +60,8 @@ export class HttpError extends Error {
   }
 }
 const bad = (msg) => new HttpError(400, msg);
+const AUTOCHECK_KEY = 'autocheck';
+const AUTOCHECK_CATCHUP_DAYS = 7;
 
 function hashStr(s) {
   let h = 5381;
@@ -1237,12 +1244,14 @@ export class Engine {
           const f = r.refuel;
           this.raiseAlert({
             ...base, severity: 'critical', t: f.t, fromT: f.fromT, lat: f.lat, lng: f.lng,
-            wentInL: f.wentIn, missingL: r.missing, roomL: r.room,
+            wentInL: f.wentIn, missingL: r.missing, roomL: r.room, beforeL: f.before, afterL: f.after,
+            receiptDate: when, nofit: !!r.nofit, station: r.station || undefined,
             title: `Receipt ${fmt(r.litres)}, tank got ${fmt(f.wentIn)}`,
             detail: `Fuel receipt for ${fmt(r.litres)} (${when}), but the tank rose only ${fmt(f.wentIn)}` +
               `${f.before !== null && f.after !== null ? ` (${fmt(f.before)} → ${fmt(f.after)})` : ''} at ${fmtLocal(f.fromT, tz)}: ${fmt(r.missing)} missing.` +
               `${r.nofit ? ` The receipt does not even fit: the tank had room for only ${fmt(r.room)}.` : ''}`,
           }, mode);
+          if (mode === 'live') this.fillReceiptAlert(base.key, { wentInL: f.wentIn, missingL: r.missing, roomL: r.room, beforeL: f.before, afterL: f.after, receiptDate: when, nofit: !!r.nofit });
         } else if (r.status === 'norefuel') {
           this.raiseAlert({
             ...base, severity: 'warning', t: localMs(r.date, r.time, this.tzOffsetMin), fromT: null,
@@ -1253,6 +1262,22 @@ export class Engine {
       } catch (e) {
         log('error', 'Checking a fuel receipt failed:', e);
       }
+    }
+  }
+
+  /** A receipt alert stored before it kept every figure (levels before / after, the receipt's
+   *  date, "does not fit"): the missing ones are added, so its record is complete. */
+  fillReceiptAlert(key, fields) {
+    try {
+      const id = this.db.alertIdByKey(key);
+      const row = id ? this.db.getAlert(id) : null;
+      if (!row) return;
+      const x = parseExtra(row.extra);
+      const add = {};
+      for (const [k, v] of Object.entries(fields)) if (x[k] === undefined && v !== undefined && v !== null) add[k] = v;
+      if (Object.keys(add).length) this.patchAlert(row.id, add, false);
+    } catch (e) {
+      log('error', 'Completing a receipt alert failed:', e);
     }
   }
 
@@ -1326,7 +1351,7 @@ export class Engine {
     if (body.verdict !== undefined) {
       const v = body.verdict === null ? 'unchecked' : body.verdict;
       if (typeof v !== 'string' || !VERDICTS.includes(v)) throw bad(`verdict must be one of ${VERDICTS.join(', ')}`);
-      if (v !== 'unchecked' && row.type !== 'fuel_drain') throw bad('Дүгнэлтийг зөвхөн түлш алдагдлын анхааруулгад өгнө');
+      if (v !== 'unchecked' && row.type !== 'fuel_drain' && row.type !== 'auto_check') throw bad('Дүгнэлтийг зөвхөн түлш алдагдлын анхааруулгад өгнө');
       verdict = v;
     }
     if (body.note !== undefined) {
@@ -1538,7 +1563,7 @@ export class Engine {
     const cal = imei ? this.vehicleCal(imei) : null;
     const th = imei ? this.settingsFor(imei).th : this.thresholds();
     const x = parseExtra(row.extra);
-    const t = row.t;
+    const t = eventEnd(row, x);
     const t0 = Number.isFinite(row.from_t) && row.from_t < t ? row.from_t : t;
     // the chart: the event with a margin either side (more for long events, up to 12 h)
     const pad = clamp((t - t0) * 0.4, 3 * HOUR, 12 * HOUR);
@@ -1671,7 +1696,7 @@ export class Engine {
     const x = parseExtra(row.extra);
     const cal = this.vehicleCal(row.imei);
     const th = this.settingsFor(row.imei).th;
-    const t = row.t;
+    const t = eventEnd(row, x);
     const t0 = Number.isFinite(row.from_t) && row.from_t < t ? row.from_t : t;
     if (row.type === 'receipt_mismatch') {
       const r = this.receiptsStored().find((rc) => rc.id === x.receiptId);
@@ -1698,6 +1723,98 @@ export class Engine {
       }
     }
     return alerts;
+  }
+
+  /**
+   * Автомат шалгалт (autocheck.js): once a day, after 01:00 local, the day before. Returns the
+   * number of cases raised, or null when it was not due. `force` runs it for `day` (YYYY-MM-DD,
+   * local) whether due or not (tools, tests).
+   */
+  runAutoCheckIfDue(now = Date.now()) {
+    const local = new Date(now + this.tzOffsetMin * MIN);
+    if (local.getUTCHours() < 1 || !this.historyReady) return null;
+    const day = new Date(now + this.tzOffsetMin * MIN - DAY).toISOString().slice(0, 10);
+    const last = this.db.getSetting(AUTOCHECK_KEY, null);
+    if (last >= day) return null;
+    this.db.setSetting(AUTOCHECK_KEY, day);
+    // the first run ever also checks the week before (the sensor streak needs past days)
+    const days = [];
+    for (let k = last ? 1 : AUTOCHECK_CATCHUP_DAYS; k >= 1; k--) days.push(new Date(now + this.tzOffsetMin * MIN - k * DAY).toISOString().slice(0, 10));
+    let n = 0;
+    for (const d of days) {
+      try {
+        n += this.runAutoCheck(d, now);
+      } catch (e) {
+        log('error', `Automatic check of ${d} failed:`, e);
+      }
+    }
+    return n;
+  }
+
+  runAutoCheck(day, now = Date.now()) {
+    const dayStart = Date.parse(`${day}T00:00:00Z`) - this.tzOffsetMin * MIN;
+    const dayEnd = dayStart + DAY;
+    const cases = [];
+    const receipts = this.receiptResultsCached(now);
+    // the day's drains and refuels of all trucks (also for 11 and 21)
+    const dayAlerts = this.queryAlerts({ types: ['fuel_drain', 'refuel'], since: dayStart - 7 * HOUR, until: dayEnd + 7 * HOUR, limit: 5000 })
+      .filter((a) => a.verdict !== 'false_alarm' && !(a.type === 'fuel_drain' && a.severity === 'info'));
+    for (const rec of this.recs.values()) {
+      if (!rec.v.hasFuel) continue;
+      const imei = rec.imei;
+      const cal = this.vehicleCal(imei);
+      const th = this.settingsFor(imei).th;
+      const rows = this.db.samplesRange(imei, dayStart - 7 * HOUR, dayEnd + 7 * HOUR);
+      const dayRows = rows.filter((s) => s.t >= dayStart && s.t < dayEnd);
+      const mine = dayAlerts.filter((a) => a.imei === imei);
+      const add = (c) => cases.push({ ...c, imei });
+      // 13: lower level after a GPS gap (not where the live detector already raised a drain)
+      for (const c of gapCases({ rows, from: dayStart, to: dayEnd, cal, th })) {
+        if (!mine.some((a) => a.type === 'fuel_drain' && (a.fromT ?? a.t) <= c.t && a.t >= c.fromT)) add(c);
+      }
+      // 1: receipt bigger than the tank's free room
+      for (const c of roomCases({ receipts: receipts.filter((r) => r.imei === imei && r.date === day), tankLiters: cal?.tankLiters })) add({ ...c, t: c.t ?? dayStart + 12 * HOUR });
+      // 15: sensor dead for days (each day's state kept, so the streak is known)
+      const sKey = `${AUTOCHECK_KEY}:sensor:${imei}`;
+      const hist = (this.db.getSetting(sKey, []) || []).filter((d) => d.day < day).slice(-59);
+      hist.push({ day, ...sensorDay({ rows: dayRows, th }) });
+      this.db.setSetting(sKey, hist);
+      const sc = sensorCase({ days: hist, receipts: receipts.filter((r) => r.imei === imei) });
+      if (sc) add({ ...sc, t: dayEnd - 1 });
+      // 9: the day's balance (not on a dead-sensor day: 15 covers it)
+      if (!hist[hist.length - 1].bad) {
+        const fills = (a, b) => mine.filter((x) => x.type === 'refuel' && x.amountL > 0 && x.t >= a && x.t <= b).reduce((s, x) => s + x.amountL, 0);
+        const bal = dayBalance({ rows, dayStart, cal, th, refuelsL: fills });
+        const pKey = `${AUTOCHECK_KEY}:perkm:${imei}`;
+        const perKm = (this.db.getSetting(pKey, []) || []).slice(-30);
+        const usual = perKm.length >= 7 ? perKm.slice().sort((x, y) => x - y)[perKm.length >> 1] : null;
+        const bc = balanceCase({ bal, usualPerKm: usual, tolL: (cal?.tankLiters || 0) * 0.05 });
+        if (bc) add(bc);
+        if (bal?.perKm && !bc) this.db.setSetting(pKey, [...perKm, bal.perKm].slice(-30));
+      }
+    }
+    // 11: fuel moved to another truck; 21: a drop soon after a refuel
+    for (const c of [...transferCases(dayAlerts), ...afterfillCases(dayAlerts)]) {
+      if ((c.fromT ?? c.t) >= dayStart && (c.fromT ?? c.t) < dayEnd) cases.push(c);
+    }
+    let raised = 0;
+    for (const c of cases) {
+      const rec = this.recs.get(c.imei);
+      const key = `${c.imei}:auto_check:${c.key ?? `${c.rule}:${c.fromT ?? c.t}`}`;
+      const exists = this.db.alertIdByKey(key);
+      if (exists) {
+        // a sensor streak goes on: the same case, its text brought up to date
+        this.db.updateAlert(exists, { detail: c.detail, extra: JSON.stringify({ rule: c.rule, lostL: c.lostL ?? null, facts: c.facts ?? null, day }) });
+        continue;
+      }
+      this.raiseAlert({
+        key, imei: c.imei, name: rec?.v.name ?? c.imei, type: 'auto_check', severity: c.severity, t: Math.min(c.t ?? dayEnd - 1, now), fromT: c.fromT ?? null,
+        lat: c.lat ?? null, lng: c.lng ?? null, title: c.title, detail: c.detail, rule: c.rule, lostL: c.lostL ?? null, facts: c.facts ?? null, day,
+      }, 'live');
+      raised++;
+    }
+    log('info', `Automatic check of ${day}: ${cases.length} cases (${raised} new)`);
+    return raised;
   }
 
   /** receiptResults, reused for 30 s (an evidence pack asks for it once per page) unless the
@@ -1957,6 +2074,16 @@ function motionIndex(rows, thr24, thr12) {
       return mov[j] - mov[i] < 2 * MIN && eng[j] - eng[i] < 15 * MIN && dist[j] - dist[i] < 300;
     },
   };
+}
+
+/** When the fuel event itself ended: a drop held back for DRAIN_CONFIRM_MS is re-dated to its
+ *  confirmation (so the dashboard shows it as new), and its detection time kept as detectedT.
+ *  The meter check and the evidence page must measure up to the detection, not the confirmation:
+ *  hours of driving in between would count the road's burn as part of the drop (1472УЕУ,
+ *  2026-11-03: 24 L at a stop shown as 98.5 L). */
+function eventEnd(row, x = parseExtra(row.extra)) {
+  const d = num(x.detectedT);
+  return Number.isFinite(d) && d <= row.t ? d : row.t;
 }
 
 function receiptOf(extra) {

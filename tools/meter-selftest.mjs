@@ -166,7 +166,10 @@ const at = (rows, i) => rows[i].t;
   const short = meterCheck({ kind: 'receipt', rows: fill(280), t0, t: T, receiptL: 400, missingL: 110, refuelSeen: true, cal, th });
   check('receipt 400 L, 280 L went in -> short, the smaller missing figure', short.verdict === 'short' && short.lost === 110, short);
   const within = meterCheck({ kind: 'receipt', rows: fill(350), t0, t: T, receiptL: 400, missingL: 50, refuelSeen: true, cal, th });
-  check('50 L of 400 L missing is within tank-table error -> full', within.verdict === 'full', within);
+  // 20 L / 5 % since c97b413 (a 47 L short fill of 500 L was called "full" before): 50 L of 400 L is short
+  check('50 L of 400 L missing is beyond tank-table error -> short', within.verdict === 'short' && within.lost === 50, within);
+  const tiny = meterCheck({ kind: 'receipt', rows: fill(385), t0, t: T, receiptL: 400, missingL: 15, refuelSeen: true, cal, th });
+  check('15 L of 400 L missing is within tank-table error -> full', tiny.verdict === 'full', tiny);
   const day = Date.UTC(2026, 9, 9, 16, 0); // 00:00 local
   const none = series(day - 7 * HOUR, [{ min: 600, from: 300 }, { min: 600, from: 300, to: 120, spd: 60 }, { min: 900, from: 120 }]);
   const nf = meterCheck({ kind: 'receipt', rows: none, t0: day, t: day, receiptL: 300, dayOnly: true, cal, th });
@@ -187,6 +190,25 @@ const at = (rows, i) => rows[i].t;
   const rows = series(T - 7 * HOUR, [{ min: 417, from: 420, to: 410, spd: 60 }, { min: 5, from: 410, to: 388 }, { min: 300, from: 388 }]);
   const m = meterCheck({ kind: 'parked', rows, t0: T, t: T + 5 * MIN, amountL: 22, cal, th });
   check('drop in the first minutes of a stop -> no settled level before it, not evidence', !CONFIRMS.has(m.verdict), m);
+}
+// 8d. 1472УЕУ 2026-11-03: a 25-min stop, the tracker reporting seldom (no reading between
+// arrival and the drop but one with a lone 6 km/h GPS jump), 24 L gone, then it drives off before
+// any reading after the detection. The meter must find the drop: the lone jump is not driving
+// (no road burn), the stop's settled readings after the fall are the level after.
+{
+  const rows = series(T - 7 * HOUR, [{ min: 418, from: 440, to: 425, spd: 50, calm: true }], 30e3);
+  const arrive = rows[rows.length - 1].t + 30e3;
+  rows.push({ t: arrive, f: mv(424), spd: 0, pwr: 27800 }); // pulls up (still sloshing)
+  rows.push({ t: arrive + 14 * MIN, f: mv(423), spd: 6, pwr: 26000 }); // lone GPS jump, engine off
+  rows.push({ t: arrive + 16 * MIN, f: mv(399), spd: 0, pwr: 25700 });
+  rows.push({ t: arrive + 17 * MIN, f: mv(399), spd: 0, pwr: 25700 });
+  rows.push(...series(arrive + 25 * MIN, [{ min: 300, from: 398, to: 250, spd: 50, calm: true }], 30e3));
+  const t0 = arrive + 14.5 * MIN;
+  const m = meterCheck({ kind: 'parked', rows, t0, t: arrive + 23 * MIN, amountL: 24, cal, th });
+  check('1472 case: drop at a seldom-reporting stop -> drop, about 24 L', m.verdict === 'drop' && m.lost >= 18 && m.lost <= 24 && m.after.v === 399 && !m.after.moving, m);
+  // the same alert measured up to its confirmation 5 h later would count the road's burn: burnt
+  const late = meterCheck({ kind: 'parked', rows, t0, t: arrive + 5 * HOUR, amountL: 24, cal, th });
+  check('1472 case measured to the confirmation -> not a 100+ L drop', !(late.verdict === 'drop' && late.lost > 24), late);
 }
 // 8c. receipts read only settled levels: a stop's first minutes at the top of the scale are not a fill,
 // and a fill at a pump stop too short to settle is never called short

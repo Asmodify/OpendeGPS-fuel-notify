@@ -64,6 +64,19 @@ try {
   check('unknown alert -> null', engine.evidence(987654, NOW) === null);
   check('meter check: the meter fell -> drop, its litres', ev?.meter?.verdict === 'drop' && ev.meter.lost === 80, ev?.meter);
 
+  // a live drain is re-dated to its confirmation 5 h later (so the dashboard shows it as new):
+  // the evidence must still end at the detection, not take in the hours after it (1472УЕУ:
+  // 24 L at a stop shown as 98.5 L, the road's burn counted in)
+  const liveId = engine.raiseAlert({
+    imei: IMEI, name: '1234ӨМЕ', type: 'fuel_drain', severity: 'critical', t: T0 + 50 * MIN, fromT: T0, key: `${IMEI}:fuel_drain:live`, lat: 43.61, lng: 105.51,
+    title: 'Fuel drop while power was off', detail: 'Fuel fell by 80 L while the power was off.', amountMv: 1600, fromMv: 6000, toMv: 4400,
+  }, 'live');
+  engine.checkPendingDrains(T0 + 50 * MIN + 6 * 60 * MIN);
+  const liveRow = db.getAlert(liveId);
+  const evL = engine.evidence(liveId, NOW);
+  check('confirmed live drain: alert re-dated, evidence ends at the detection', liveRow.t > T0 + 5 * 60 * MIN && evL?.eventTo === T0 + 50 * MIN, { t: liveRow.t, eventTo: evL?.eventTo });
+  check('confirmed live drain: meter measured to the detection', evL?.meter?.verdict === 'drop' && evL.meter.lost === 80, evL?.meter);
+
   // a "drain" the fuel meter does not show (it reads 220 L flat): no litres, not evidence
   const flatId = engine.raiseAlert({
     imei: IMEI, name: '1234ӨМЕ', type: 'fuel_drain', severity: 'critical', t: T0 + 150 * MIN, fromT: T0 + 140 * MIN, lat: 43.61, lng: 105.51,
