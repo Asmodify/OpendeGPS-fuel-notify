@@ -46,6 +46,7 @@ export const TYPE_LABELS = {
   power_restored: 'Тэжээл сэргэсэн',
   back_online: 'Дахин холбогдсон',
   receipt_mismatch: 'Баримт зөрсөн',
+  auto_check: 'Автомат шалгалт',
   drive_rest_soon: 'Удахгүй амрах шаардлагатай',
   drive_no_rest: 'Амралтгүй жолоодсон',
 };

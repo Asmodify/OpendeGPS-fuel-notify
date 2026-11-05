@@ -459,6 +459,7 @@ export class Poller {
     this.engine.stats.heldVehicles = this.engine.heldCount();
     this.engine.checkPendingDrains(); // fuel drops held for the 5 h check
     this.engine.checkReceipts(); // fuel receipts vs. the refuels recorded
+    this.engine.runAutoCheckIfDue(); // Автомат шалгалт: once a day, after 01:00, the day before
     this.engine.saveLearned();
     if (failed) this.recordError('messages', lastErr, ` (${failed}/${due.length} vehicles failed, retried next cycle)`, failed < due.length);
     else this.markOk('messages');
