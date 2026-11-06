@@ -12,7 +12,9 @@
 //                  more running: the days, the km and the receipt litres of that time
 //   balance     9  the day's fuel: level at the start + refuels - level at the end, against the
 //                  most the day's driving and idling could burn (hard case), and against the
-//                  truck's own usual litres a km (a softer "higher than usual" case)
+//                  truck's own learned norm (litres a km + litres an idle hour, fitted on its own
+//                  past clean days, so a border-queue shuttle and a long-route truck each get a
+//                  fair figure): a softer "higher than its norm" case with the litres over it
 //   transfer   11  one truck's level fell while another's rose, at the same place and time
 //   afterfill  21  a drop within 2 h after a refuel (fuel filled, then taken off into cans)
 //
@@ -37,6 +39,10 @@ const TRANSFER_M = 300;
 const AFTERFILL_MS = 2 * HOUR;
 const BALANCE_MIN_L = 30; // the smallest daily excess worth a case (tank tables read within a few %)
 const USUAL_FACTOR = 1.25; // "higher than usual": 25 % over the truck's own median litres a km
+export const NORM_MIN_DAYS = 7; // clean past days needed before a truck's own norm is trusted
+export const NORM_KEEP_DAYS = 40;
+const NORM_PER_KM = [0.15, 3]; // L/km a fit may land on (a shuttle in queues ~1.9, long route ~0.8)
+const NORM_PER_IDLE_H = [0, 15]; // L an idle hour
 
 const round1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const median = (xs) => {
@@ -189,20 +195,70 @@ export function dayBalance({ rows, dayStart, cal, th, refuelsL = 0 }) {
   const ceiling = BURN.perKm * km + BURN.idle * (idleMs / HOUR);
   return { start, end, refuelsL: round1(fills), km: round1(km), idleH: round1(idleMs / HOUR), used: round1(used), ceiling: round1(ceiling), perKm: km >= 50 ? round1(used / km * 100) / 100 : null };
 }
-/** A case from a day's balance: beyond the burn ceiling (proof), or 25 % over the truck's usual
- *  litres a km (usualPerKm, from its own past days: a softer case to look at). */
-export function balanceCase({ bal, usualPerKm, tolL = 0 }) {
+const clamp = (v, [lo, hi]) => Math.min(hi, Math.max(lo, v));
+/** A truck's own norm from its past clean days [{ km, idleH, used }]: used ≈ perKm·km +
+ *  perIdleH·idleH (least squares, no constant), refitted once without the worst tenth, and the
+ *  spread (robust sd of what the norm leaves unexplained). null with fewer than NORM_MIN_DAYS. */
+export function fitNorm(days) {
+  const ok = (days || []).filter((d) => Number.isFinite(d?.km) && Number.isFinite(d?.idleH) && Number.isFinite(d?.used) && d.used >= 0 && (d.km >= 5 || d.idleH >= 1));
+  if (ok.length < NORM_MIN_DAYS) return null;
+  const fit = (xs) => {
+    let kk = 0, kh = 0, hh = 0, ku = 0, hu = 0;
+    for (const d of xs) { kk += d.km * d.km; kh += d.km * d.idleH; hh += d.idleH * d.idleH; ku += d.km * d.used; hu += d.idleH * d.used; }
+    const det = kk * hh - kh * kh;
+    let a, b;
+    if (kk > 0 && hh > 0 && Math.abs(det) > 1e-9 * kk * hh) { a = (ku * hh - hu * kh) / det; b = (kk * hu - kh * ku) / det; }
+    if (!(Number.isFinite(a) && Number.isFinite(b)) || a < NORM_PER_KM[0] || b < 0) {
+      // one term only (all days alike, or the fit went negative): litres a km, idle at the fixed 6 L/h
+      b = BURN.idle;
+      const k = xs.reduce((s, d) => s + d.km, 0);
+      a = k > 0 ? xs.reduce((s, d) => s + Math.max(0, d.used - b * d.idleH), 0) / k : NORM_PER_KM[0];
+    }
+    return { a: clamp(a, NORM_PER_KM), b: clamp(b, NORM_PER_IDLE_H) };
+  };
+  let n = fit(ok);
+  const res = (m, d) => d.used - (m.a * d.km + m.b * d.idleH);
+  const sorted = ok.slice().sort((x, y) => Math.abs(res(n, x)) - Math.abs(res(n, y)));
+  const kept = sorted.slice(0, Math.max(NORM_MIN_DAYS, Math.ceil(sorted.length * 0.9)));
+  n = fit(kept);
+  const spread = 1.4826 * median(kept.map((d) => Math.abs(res(n, d))));
+  return { perKm: round1(n.a * 1000) / 1000, perIdleH: round1(n.b), spread: round1(spread), days: kept.length };
+}
+/** A case from a day's balance: beyond the burn ceiling (proof), or over the truck's own learned
+ *  norm (a softer case to look at, with the litres over it). The hard ceiling is raised to what the
+ *  truck's own norm allows where that is higher (a border-queue shuttle honestly burns more a km
+ *  than 1.3 L): its normal day is never called proof. usualPerKm is the older median L/km, used
+ *  while no norm is learned yet. */
+export function balanceCase({ bal, norm = null, usualPerKm = null, tolL = 0 }) {
   if (!bal) return null;
   const allow = Math.max(BALANCE_MIN_L, tolL);
-  const overCeiling = bal.used - bal.ceiling;
+  const expected = norm ? round1(norm.perKm * bal.km + norm.perIdleH * bal.idleH) : null;
+  const ceiling = norm ? Math.max(bal.ceiling, round1(expected * USUAL_FACTOR + 2 * (norm.spread || 0))) : bal.ceiling;
+  const overCeiling = bal.used - ceiling;
   const base = `Өглөө ${round1(bal.start.v)} л + цэнэглэлт ${bal.refuelsL} л − орой ${round1(bal.end.v)} л = ${bal.used} л зарцуулсан, ${bal.km} км явсан`;
+  const normText = norm
+    ? `Энэ машины өөрийн норм ${round1(norm.perKm * 100)} л/100км, сул ажиллагаа ${norm.perIdleH} л/ц (сүүлийн ${norm.days} хоногоос): өнөөдөр ${expected} л байх ёстой.`
+    : '';
   if (overCeiling >= allow) {
     return {
       rule: 'balance', severity: 'critical', lostL: round1(overCeiling), fromT: bal.start.t, t: bal.end.t,
       title: 'Өдрийн түлшний тэнцэл зөрсөн',
-      detail: `${base}. Шатаж болох дээд хэмжээ ${bal.ceiling} л (1.3 л/км, сул ажиллагаа 6 л/ц). ${round1(overCeiling)} л тайлбаргүй.`,
-      facts: { ...bal, usualPerKm },
+      detail: `${base}. Шатаж болох дээд хэмжээ ${round1(ceiling)} л${ceiling > bal.ceiling ? ' (энэ машины нормоор)' : ' (1.3 л/км, сул ажиллагаа 6 л/ц)'}. ${round1(overCeiling)} л тайлбаргүй.` +
+        (norm ? ` ${normText} Нормоос ${round1(bal.used - expected)} л их.` : ''),
+      facts: { ...bal, ceiling: round1(ceiling), norm, expected, overNorm: norm ? round1(bal.used - expected) : null, usualPerKm },
     };
+  }
+  if (norm && (bal.km >= 20 || bal.idleH >= 2)) {
+    const over = round1(bal.used - expected);
+    if (over >= Math.max(allow, 3 * (norm.spread || 0))) {
+      return {
+        rule: 'balance', severity: 'warning', lostL: null, fromT: bal.start.t, t: bal.end.t,
+        title: 'Зарцуулалт нормоос их',
+        detail: `${base}. ${normText} Нормоос ${over} л их. Шатаж болох дээд хэмжээнд багтсан тул нотолгоо биш: шалгах.`,
+        facts: { ...bal, norm, expected, overNorm: over },
+      };
+    }
+    return null;
   }
   if (Number.isFinite(usualPerKm) && bal.km >= 50) {
     const expected = usualPerKm * bal.km * USUAL_FACTOR;

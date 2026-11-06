@@ -7,8 +7,9 @@ import { ledgerEntry, litersAt, fuelPct, amountLitres, fuelEventLitres, isPendin
 import { gpsFault, fuelSensorState, fuelFaultInfo, buildFleetStatusSheets } from './fleetstatus.js';
 import { validPos } from './refuelplaces.js';
 import { meterCheck, CONFIRMS, probeFault } from './meter.js';
-import { gapCases, roomCases, sensorDay, sensorCase, dayBalance, balanceCase, transferCases, afterfillCases } from './autocheck.js';
+import { gapCases, roomCases, sensorDay, sensorCase, dayBalance, balanceCase, transferCases, afterfillCases, fitNorm, NORM_MIN_DAYS, NORM_KEEP_DAYS } from './autocheck.js';
 import { mnTitle, mnDetail, mnAlertTypes } from './mn.js';
+import { secondOpinion, opinionText, meterLine, officerOn, OFFICER_MONTHLY_MAX } from './officer.js';
 import { odoStepOk, motionStatsOf, sliceByTime } from './motion.js';
 import {
   RECEIPTS_KEY, RECEIPTS_MAX, MISSING_MIN_L, MISSING_MIN_PCT, parseReceiptText, receiptId, refuelsFromRows, matchReceipts, receiptTotals, localMs,
@@ -1732,7 +1733,15 @@ export class Engine {
    */
   runAutoCheckIfDue(now = Date.now()) {
     const local = new Date(now + this.tzOffsetMin * MIN);
-    if (local.getUTCHours() < 1 || !this.historyReady) return null;
+    if (!this.historyReady) return null;
+    // once, after the second opinion is switched on: the open cases of the last 7 days get one too
+    if ((officerOn() || this.secondOpinionFn) && !this.db.getSetting(`${AUTOCHECK_KEY}:officer:backfill`, false)) {
+      this.db.setSetting(`${AUTOCHECK_KEY}:officer:backfill`, true);
+      const keys = this.queryAlerts({ types: ['auto_check'], since: now - 8 * DAY, limit: 200 })
+        .filter((a) => a.verdict === 'unchecked').map((a) => a.key).filter(Boolean);
+      if (keys.length) this.officerChain = (this.officerChain || Promise.resolve()).then(() => this.secondOpinions(keys)).catch((e) => log('error', 'Second opinion failed:', e));
+    }
+    if (local.getUTCHours() < 1) return null;
     const day = new Date(now + this.tzOffsetMin * MIN - DAY).toISOString().slice(0, 10);
     const last = this.db.getSetting(AUTOCHECK_KEY, null);
     if (last >= day) return null;
@@ -1785,12 +1794,17 @@ export class Engine {
       if (!hist[hist.length - 1].bad) {
         const fills = (a, b) => mine.filter((x) => x.type === 'refuel' && x.amountL > 0 && x.t >= a && x.t <= b).reduce((s, x) => s + x.amountL, 0);
         const bal = dayBalance({ rows, dayStart, cal, th, refuelsL: fills });
-        const pKey = `${AUTOCHECK_KEY}:perkm:${imei}`;
-        const perKm = (this.db.getSetting(pKey, []) || []).slice(-30);
-        const usual = perKm.length >= 7 ? perKm.slice().sort((x, y) => x - y)[perKm.length >> 1] : null;
-        const bc = balanceCase({ bal, usualPerKm: usual, tolL: (cal?.tankLiters || 0) * 0.05 });
+        // the truck's own norm, from its clean past days (seeded once from the 30 days before)
+        const nKey = `${AUTOCHECK_KEY}:norm:${imei}`;
+        let normDays = (this.db.getSetting(nKey, null) || null);
+        if (!normDays) normDays = this.seedNormDays(imei, dayStart, cal, th);
+        normDays = normDays.filter((d) => d.day < day).slice(-NORM_KEEP_DAYS);
+        const norm = fitNorm(normDays);
+        const bc = balanceCase({ bal, norm, tolL: (cal?.tankLiters || 0) * 0.05 });
         if (bc) add(bc);
-        if (bal?.perKm && !bc) this.db.setSetting(pKey, [...perKm, bal.perKm].slice(-30));
+        // a day joins the norm only when nothing was wrong with it
+        if (bal && !bc && bal.used >= 0) normDays.push({ day, km: bal.km, idleH: bal.idleH, used: bal.used });
+        this.db.setSetting(nKey, normDays.slice(-NORM_KEEP_DAYS));
       }
     }
     // 11: fuel moved to another truck; 21: a drop soon after a refuel
@@ -1798,13 +1812,18 @@ export class Engine {
       if ((c.fromT ?? c.t) >= dayStart && (c.fromT ?? c.t) < dayEnd) cases.push(c);
     }
     let raised = 0;
+    const fresh = [];
     for (const c of cases) {
       const rec = this.recs.get(c.imei);
       const key = `${c.imei}:auto_check:${c.key ?? `${c.rule}:${c.fromT ?? c.t}`}`;
       const exists = this.db.alertIdByKey(key);
       if (exists) {
         // a sensor streak goes on: the same case, its text brought up to date
-        this.db.updateAlert(exists, { detail: c.detail, extra: JSON.stringify({ rule: c.rule, lostL: c.lostL ?? null, facts: c.facts ?? null, day }) });
+        const old = parseExtra(this.db.getAlert(exists)?.extra) || {};
+        this.db.updateAlert(exists, {
+          detail: `${c.detail}${opinionText(old.officer)}`,
+          extra: JSON.stringify({ rule: c.rule, lostL: c.lostL ?? null, facts: c.facts ?? null, day, ...(old.officer ? { officer: old.officer } : {}) }),
+        });
         continue;
       }
       this.raiseAlert({
@@ -1812,9 +1831,80 @@ export class Engine {
         lat: c.lat ?? null, lng: c.lng ?? null, title: c.title, detail: c.detail, rule: c.rule, lostL: c.lostL ?? null, facts: c.facts ?? null, day,
       }, 'live');
       raised++;
+      fresh.push(key);
     }
     log('info', `Automatic check of ${day}: ${cases.length} cases (${raised} new)`);
+    if (fresh.length && (officerOn() || this.secondOpinionFn)) {
+      this.officerChain = (this.officerChain || Promise.resolve())
+        .then(() => this.secondOpinions(fresh))
+        .catch((e) => log('error', 'Second opinion failed:', e));
+    }
     return raised;
+  }
+
+  /** Хоёр дахь дүгнэлт (officer.js) on new Автомат шалгалт cases, one at a time, within the
+   *  month's cap. It adds a line to the case's text and keeps the answer in extra.officer; the
+   *  verdict stays the person's. */
+  async secondOpinions(keys) {
+    for (const key of keys) {
+      const id = this.db.alertIdByKey(key);
+      const row = id && this.db.getAlert(id);
+      if (!row) continue;
+      const x = parseExtra(row.extra) || {};
+      if (x.officer) continue;
+      const month = new Date(Date.now() + this.tzOffsetMin * MIN).toISOString().slice(0, 7);
+      const cKey = `${AUTOCHECK_KEY}:officer:${month}`;
+      const used = Number(this.db.getSetting(cKey, 0)) || 0;
+      if (used >= OFFICER_MONTHLY_MAX) {
+        log('warn', `Second opinion skipped: ${used} this month, the cap is ${OFFICER_MONTHLY_MAX}`);
+        return;
+      }
+      this.db.setSetting(cKey, used + 1);
+      const imei = row.imei;
+      const cal = this.vehicleCal(imei);
+      const from = (row.from_t ?? row.fromT ?? row.t) - 12 * HOUR;
+      const to = row.t + 6 * HOUR;
+      const rows = this.db.samplesRange(imei, from, to);
+      const days = new Set([from, row.t, to].map((t) => new Date(t + this.tzOffsetMin * MIN).toISOString().slice(0, 10)));
+      const receipts = this.receiptResultsCached().filter((r) => r.imei === imei && days.has(r.date))
+        .map((r) => ({ date: r.date, time: r.time ?? null, litres: r.litres, status: r.status ?? null, room: r.room ?? null }));
+      const o = await (this.secondOpinionFn || secondOpinion)({
+        name: this.recs.get(imei)?.v.name ?? imei, title: row.title, detail: row.detail, rule: x.rule, lostL: x.lostL ?? null,
+        facts: x.facts ?? null, norm: x.facts?.norm ?? null, receipts,
+        line: meterLine(rows, (mv) => litersAt(mv, cal), this.tzOffsetMin),
+      });
+      if (!o || o.error) {
+        if (o?.error) log('warn', `Second opinion on alert ${id} failed: ${o.error}`);
+        continue;
+      }
+      const now = this.db.getAlert(id);
+      if (!now) continue;
+      this.db.updateAlert(id, { detail: `${now.detail || ''}${opinionText(o)}`, extra: JSON.stringify({ ...(parseExtra(now.extra) || {}), officer: o }) });
+      this.alertsChangedForSummary();
+      this.hub?.broadcast('alert', this.alertView(this.db.getAlert(id)));
+      log('info', `Second opinion on ${row.title} (${imei}): ${o.label}, ${o.confidence} %`);
+    }
+  }
+
+  /** A truck's clean days for its norm, worked out from the 30 days before `before` (the first
+   *  night after this check came in; later nights add one day each). Days with a dead sensor or
+   *  a balance beyond the fixed burn ceiling are left out. */
+  seedNormDays(imei, before, cal, th) {
+    const out = [];
+    const refuels = this.queryAlerts({ types: ['refuel'], imei, since: before - 31 * DAY, until: before, limit: 5000 })
+      .filter((a) => a.verdict !== 'false_alarm' && a.amountL > 0);
+    for (let k = 30; k >= 1; k--) {
+      const ds = before - k * DAY;
+      const rows = this.db.samplesRange(imei, ds - 7 * HOUR, ds + DAY + 7 * HOUR);
+      if (rows.length < 20) continue;
+      if (sensorDay({ rows: rows.filter((s) => s.t >= ds && s.t < ds + DAY), th }).bad) continue;
+      const fills = (a, b) => refuels.filter((x) => x.t >= a && x.t <= b).reduce((s, x) => s + x.amountL, 0);
+      const bal = dayBalance({ rows, dayStart: ds, cal, th, refuelsL: fills });
+      if (!bal || bal.used < 0 || balanceCase({ bal })) continue;
+      out.push({ day: new Date(ds + this.tzOffsetMin * MIN).toISOString().slice(0, 10), km: bal.km, idleH: bal.idleH, used: bal.used });
+    }
+    log('info', `Fuel norm for ${imei}: ${out.length} clean days found in the 30 days before (${out.length >= NORM_MIN_DAYS ? 'norm in use' : 'too few yet'})`);
+    return out;
   }
 
   /** receiptResults, reused for 30 s (an evidence pack asks for it once per page) unless the
