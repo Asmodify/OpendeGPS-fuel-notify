@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { gapCases, roomCases, sensorDay, sensorCase, dayBalance, balanceCase, transferCases, afterfillCases } from '../src/autocheck.js';
+import { gapCases, roomCases, sensorDay, sensorCase, dayBalance, balanceCase, transferCases, afterfillCases, fitNorm } from '../src/autocheck.js';
 import { loadConfig } from '../src/config.js';
 import { openDb } from '../src/db.js';
 import { Engine } from '../src/engine.js';
@@ -112,6 +112,34 @@ function series(start, segs, step = 2 * MIN) {
   check('afterfill: A dropped 50 min after its 350 L refuel -> case', af.length === 1 && af[0].imei === 'A', af);
 }
 
+// learned norm per truck
+{
+  const wob = (i) => ((i * 37) % 11) / 10 - 0.5; // -0.5 .. 0.5, fixed
+  // a shuttle that honestly burns 1.65 L/km with no idle hours seen (border queue, engine on)
+  const shuttle = Array.from({ length: 12 }, (_, i) => ({ day: `d${i}`, km: 90 + i * 3, idleH: 0, used: (90 + i * 3) * 1.65 + wob(i) * 6 }));
+  const ns = fitNorm(shuttle);
+  check('norm: shuttle fitted near 1.65 L/km', ns && Math.abs(ns.perKm - 1.65) < 0.05, ns);
+  check('norm: fewer than 7 days -> none', fitNorm(shuttle.slice(0, 6)) === null);
+  const day = { start: { t: 0, v: 400 }, end: { t: 1, v: 235 }, refuelsL: 0, km: 100, idleH: 0, used: 165, ceiling: 130, perKm: 1.65 };
+  const fixed = balanceCase({ bal: day, tolL: 25 });
+  check('norm: 165 L / 100 km on the fixed ceiling alone -> a hard case (the old false alarm)', fixed?.severity === 'critical', fixed?.lostL);
+  check('norm: same day with the shuttle\'s own norm -> no case', balanceCase({ bal: day, norm: ns, tolL: 25 }) === null);
+  // a long-route truck, 0.8 L/km and 6 L/h idle
+  const long = Array.from({ length: 20 }, (_, i) => { const km = 180 + (i % 5) * 30; const h = 1 + (i % 3); return { day: `l${i}`, km, idleH: h, used: km * 0.8 + h * 6 + wob(i) * 10 }; });
+  const nl = fitNorm(long);
+  check('norm: long route fitted near 0.8 L/km and 6 L/h', nl && Math.abs(nl.perKm - 0.8) < 0.05 && Math.abs(nl.perIdleH - 6) < 2, nl);
+  // 1874-like day: 370.6 L for 229.5 km, 1 h idle
+  const d1874 = { start: { t: 0, v: 500.8 }, end: { t: 1, v: 130.2 }, refuelsL: 0, km: 229.5, idleH: 1, used: 370.6, ceiling: 304.4 };
+  const c1874 = balanceCase({ bal: d1874, norm: nl, tolL: 29.5 });
+  check('norm: 1874-like day stays a hard case and says ~180 L over its own norm', c1874?.severity === 'critical' && c1874.facts.overNorm > 160 && /норм/.test(c1874.detail), c1874 && { lostL: c1874.lostL, overNorm: c1874.facts.overNorm });
+  // inside the ceiling but well over its norm -> softer case with the litres
+  const dw = { start: { t: 0, v: 400 }, end: { t: 1, v: 170 }, refuelsL: 0, km: 200, idleH: 1, used: 230, ceiling: 266 };
+  const cw = balanceCase({ bal: dw, norm: nl, tolL: 25 });
+  check('norm: 230 L for 200 km (norm ~166 L) -> "Зарцуулалт нормоос их" with ~64 L', cw?.severity === 'warning' && cw.facts.overNorm > 50 && cw.lostL === null, cw && cw.facts.overNorm);
+  const dn = { ...dw, end: { t: 1, v: 230 }, used: 170 };
+  check('norm: a normal day -> no case', balanceCase({ bal: dn, norm: nl, tolL: 25 }) === null);
+}
+
 // a full nightly run on a throw-away database
 {
   const IMEI = '999999061234500';
@@ -130,11 +158,18 @@ function series(start, segs, step = 2 * MIN) {
     const a = series(T - 7 * HOUR, [{ min: 600, from: 300 }]);
     const b = series(a[a.length - 1].t + 4 * HOUR, [{ min: 900, from: 220 }]);
     db.insertSamples(IMEI, [...a, ...b].map((s) => ({ ...s, ign: 0, odo: null })));
+    const asked = [];
+    engine.secondOpinionFn = async (input) => { asked.push(input); return { view: 'likely_theft', label: 'Хулгай байж магадгүй', confidence: 80, reason: 'Зогсож байхад 80 л буурсан.', checks: ['Жолоочоос асуух'], model: 'test' }; };
     const n = engine.runAutoCheck('2026-11-04', T + 26 * HOUR);
+    await engine.officerChain;
     const list = engine.queryAlerts({ types: ['auto_check'], limit: 50 });
     check('nightly run: the GPS-gap case is stored as an "Автомат шалгалт" alert', n >= 1 && list.some((x) => x.imei === IMEI && /GPS/.test(x.title)), list.map((x) => x.title));
-    check('nightly run: alert type label is Автомат шалгалт', engine.alertTypes.auto_check?.label === 'Автомат шалгалт', engine.alertTypes.auto_check);
+    const withOp = engine.queryAlerts({ types: ['auto_check'], limit: 50 }).filter((x) => /Хоёр дахь дүгнэлт: Хулгай байж магадгүй \(итгэл 80 %\)/.test(x.detail));
+    check('second opinion: asked once per new case, its line added to the case, meter line sent', asked.length === n && withOp.length === n && asked[0].line.length > 10, { asked: asked.length, n, withOp: withOp.length });
+        check('nightly run: alert type label is Автомат шалгалт', engine.alertTypes.auto_check?.label === 'Автомат шалгалт', engine.alertTypes.auto_check);
     const again = engine.runAutoCheck('2026-11-04', T + 26 * HOUR);
+    await engine.officerChain;
+    check('second opinion: a second run asks nothing new', asked.length === n, asked.length);
     check('nightly run twice: no duplicate cases', again === 0 && engine.queryAlerts({ types: ['auto_check'], limit: 50 }).length === list.length, again);
     const id = list[0]?.id;
     const rv = id ? engine.reviewAlert(id, { verdict: 'false_alarm', note: 'test' }) : null;
