@@ -31,6 +31,7 @@ const FALSE_ALARM_MAX_RISE_MV = 300; // ending this much above the pre-drop leve
 const HOLD_MIN_MS = 20 * MIN; // after a gap in the data, wait at least this long for the backlog
 const HOLD_MAX_MS = 2 * HOUR; // ...and at most this long
 const OFFLINE_ALERT_MS = 6 * HOUR; // a silent tracker is alerted after this long (sooner only if the fuel changed)
+const OFFLINE_MOVING_ALERT_MS = 2 * HOUR; // ...or after this long when it went quiet while driving (user, 2026-11-23)
 const OUTAGE_LEVEL_MS = 3 * HOUR; // a trusted level this old at most stands for the level when it went quiet
 
 /** Alert types the backend itself can produce, plus fallbacks for the detector's types. */
@@ -580,11 +581,12 @@ export class Engine {
         rec.outage = wasOnline && i.lastSeen ? this.outageStart(rec) : null;
       }
       const o = rec.outage;
-      if (o && !o.alerted && now - o.from >= OFFLINE_ALERT_MS) {
+      const due = o?.moving ? OFFLINE_MOVING_ALERT_MS : OFFLINE_ALERT_MS;
+      if (o && !o.alerted && now - o.from >= due) {
         o.alerted = true;
         const moving = (i.speed ?? 0) >= 3;
         // the alert became due while the program was not running: recorded, but not popped up as news
-        const mode = o.from + OFFLINE_ALERT_MS < this.startedAt ? 'backfill' : 'live';
+        const mode = o.from + due < this.startedAt ? 'backfill' : 'live';
         this.raiseAlert({
           imei: rec.imei, name: rec.v.name, type: 'offline', severity: 'critical', t: now, fromT: o.from,
           lat: i.lat, lng: i.lng, ongoing: true,
@@ -664,7 +666,8 @@ export class Engine {
       else if (rec.lastLevel && Number.isFinite(rec.lastLevel.mv) && recent(rec.lastLevel.t)) mv = rec.lastLevel.mv;
       else if (Number.isFinite(i.fuelRaw) && i.fuelRaw >= minMv) mv = i.fuelRaw;
     }
-    return { from: i.lastSeen, mv, lat: i.lat ?? null, lng: i.lng ?? null, alerted: false };
+    // driving when it went quiet: alerted sooner (a tracker on a moving truck reports every few seconds)
+    return { from: i.lastSeen, mv, lat: i.lat ?? null, lng: i.lng ?? null, moving: (i.speed ?? 0) >= 3, alerted: false };
   }
 
   /** The fuel level across a silence that just ended: before / after, the change and how much
