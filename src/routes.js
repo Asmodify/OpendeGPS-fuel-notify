@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { HttpError } from './engine.js';
 import { fleetStatusXlsxOpts } from './fleetstatus.js';
 import { ALERTS_EXPORT_MAX, alertFilterFromQuery, alertsXlsxName, alertsXlsxOpts, buildAlertSheets } from './alertsxlsx.js';
@@ -37,16 +38,30 @@ const PLACEHOLDER = `<!doctype html><meta charset="utf-8"><title>Fuel Tank Warne
 <p>The server is running, but the dashboard files (public/index.html) are missing.</p>
 <p>API: <a href="/api/vehicles">/api/vehicles</a> &middot; <a href="/api/alerts">/api/alerts</a> &middot; <a href="/api/status">/api/status</a></p></body>`;
 
+const acceptsGzip = (req) => /\bgzip\b/.test(String(req?.headers?.['accept-encoding'] || ''));
+
 function send(res, status, body, headers = {}) {
-  const data = Buffer.from(JSON.stringify(body));
+  let data = Buffer.from(JSON.stringify(body));
+  const extra = {};
+  // big answers (vehicles, alerts, tracks) go gzipped: several times smaller over the phone network
+  if (data.length > 8192 && acceptsGzip(res.req)) {
+    data = zlib.gzipSync(data, { level: 6 });
+    extra['content-encoding'] = 'gzip';
+    extra.vary = 'Accept-Encoding';
+  }
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': data.length,
     'cache-control': 'no-store',
+    ...extra,
     ...headers,
   });
   res.end(data);
 }
+
+// gzipped copies of the dashboard's text files, rebuilt when the file changes
+const gzCache = new Map();
+const GZ_TYPES = new Set(['.js', '.css', '.html', '.svg', '.json']);
 
 async function readJson(req, limit = 1024 * 1024) {
   const chunks = [];
@@ -487,12 +502,29 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger, look
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       return res.end('Not found');
     }
-    res.writeHead(200, {
-      'content-type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      'content-length': st.size,
+    const ext = path.extname(file).toLowerCase();
+    // no-cache + ETag: the browser keeps its copy and asks; unchanged files answer 304 with no body
+    const etag = `"${st.size.toString(36)}-${Math.round(st.mtimeMs).toString(36)}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { etag, 'cache-control': 'no-cache' });
+      return res.end();
+    }
+    const head = {
+      'content-type': MIME[ext] || 'application/octet-stream',
       'cache-control': 'no-cache',
+      etag,
       'x-content-type-options': 'nosniff',
-    });
+    };
+    if (GZ_TYPES.has(ext) && st.size > 1024 && acceptsGzip(req)) {
+      let gz = gzCache.get(file);
+      if (!gz || gz.etag !== etag) {
+        gz = { etag, data: zlib.gzipSync(fs.readFileSync(file), { level: 9 }) };
+        gzCache.set(file, gz);
+      }
+      res.writeHead(200, { ...head, 'content-encoding': 'gzip', vary: 'Accept-Encoding', 'content-length': gz.data.length });
+      return res.end(req.method === 'HEAD' ? undefined : gz.data);
+    }
+    res.writeHead(200, { ...head, 'content-length': st.size });
     if (req.method === 'HEAD') return res.end();
     const stream = fs.createReadStream(file);
     stream.on('error', () => res.destroy());
