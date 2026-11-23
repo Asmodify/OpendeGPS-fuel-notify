@@ -112,7 +112,7 @@ const S = {
   es: null,
   sseDropped: false,
   fleet: savedFleetFilters(),
-  map: { filter: loadView('mapFilter', 'all'), group: loadView('mapGroup', ''), names: loadPref('mapNames', false), trail: loadPref('mapTrail', 0), q: '', sel: null, active: 0 },
+  map: { filter: loadView('mapFilter', 'all'), group: loadView('mapGroup', ''), names: loadPref('mapNames', false), trail: loadPref('mapTrail', 0), trailDay: '', trailPick: [], q: '', sel: null, active: 0 },
   alerts: {
     list: [], loading: false, error: null, hasMore: false, loaded: false, newIds: new Set(),
     f: savedAlertFilters(),
@@ -1271,21 +1271,24 @@ function renderMap() {
 // where it stood 20 min or more. The selected truck's trail is drawn bold, the rest faded.
 const TRAIL_COLORS = ['#1f6fd1', '#d1361f', '#1f9e55', '#8a3ffc', '#e07800', '#0f8b8d', '#c0267a', '#5b6b00', '#6f4e37', '#2a2f8f'];
 function trailColor(imei) {
+  const k = S.map.trailPick.indexOf(String(imei));
+  if (k >= 0) return TRAIL_COLORS[k % TRAIL_COLORS.length];
   let h = 0;
   for (const ch of String(imei)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return TRAIL_COLORS[h % TRAIL_COLORS.length];
 }
 let trailReq = 0;
 async function loadTrails(force = false) {
-  const h = S.map.trail;
-  if (!h) { S.trails = null; drawTrails(); return; }
+  const h = S.map.trail === 'day' ? `day:${trailDayValue()}` : Number(S.map.trail) || 0;
+  if (!h) { S.trails = null; drawTrails(); renderMapList(); return; }
   if (!force && S.trails?.hours === h && Date.now() - S.trails.loadedAt < 5 * 60e3) { drawTrails(); return; }
+  const q = S.map.trail === 'day' ? `dayFrom=${new Date(`${trailDayValue()}T00:00:00`).getTime()}` : `hours=${h}`;
   const req = ++trailReq;
   const sel = $('#map-trail');
   sel?.classList.add('loading');
   try {
-    const data = await api(`/api/tracks?hours=${h}`, { timeout: 90000 });
-    if (req !== trailReq || S.map.trail !== h) return;
+    const data = await api(`/api/tracks?${q}`, { timeout: 90000 });
+    if (req !== trailReq) return;
     const first = !S.trails || S.trails.hours !== h;
     S.trails = { hours: h, loadedAt: Date.now(), byImei: new Map((data?.tracks || []).map((t) => [String(t.imei), t])) };
     if (first) { drawTrails(); fitMap(); }
@@ -1295,6 +1298,13 @@ async function loadTrails(force = false) {
     if (req === trailReq) sel?.classList.remove('loading');
   }
   drawTrails();
+  renderMapList();
+}
+/** The chosen day for 'Өдөр': today unless another day was picked. */
+function trailDayValue() {
+  if (S.map.trailDay) return S.map.trailDay;
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 function drawTrails(shown = null) {
   if (!S.trailLayer) return;
@@ -1302,8 +1312,11 @@ function drawTrails(shown = null) {
   if (!S.map.trail || !S.trails) return;
   const show = shown || new Set(markers.keys());
   const sel = S.map.sel;
+  // trucks picked with "Зам" in the list: only those (and the selected one); none picked: all shown
+  const pick = S.map.trailPick;
   for (const [imei, t] of S.trails.byImei) {
     if (!show.has(imei)) continue;
+    if (pick.length && !pick.includes(imei) && sel !== imei) continue;
     const v = S.byImei.get(imei);
     const name = v?.shortName || imei;
     const c = trailColor(imei);
@@ -1369,11 +1382,13 @@ function renderMapList() {
     const pct = v.hasFuel ? fuelPct(v) : null;
     const where = validLatLng(v);
     const sub = v.status === 'moving' && v.speed !== null ? `${fmtNum(v.speed)} км/ц` : STATUS[v.status].label;
-    return html`<button type="button" class="ml-row${isSel(v) ? ' sel' : ''}${q && i === S.map.active ? ' active' : ''}${where ? '' : ' nopos'}" role="option" aria-selected="${isSel(v) ? 'true' : 'false'}" data-locate="${v.imei}" title="${where ? 'Газрын зураг дээр харуулах' : 'Байршил ирээгүй'}">
+    const picked = S.map.trailPick.includes(v.imei);
+    const pickBtn = S.map.trail ? html`<button type="button" class="ml-pick" data-pick="${v.imei}" aria-pressed="${picked ? 'true' : 'false'}" title="Зөвхөн сонгосон машинуудын замыг зурах" ${picked ? raw(`style="background:${trailColor(v.imei)};border-color:${trailColor(v.imei)};color:#fff"`) : ''}>Зам</button>` : '';
+    return html`<div class="ml-item"><button type="button" class="ml-row${isSel(v) ? ' sel' : ''}${q && i === S.map.active ? ' active' : ''}${where ? '' : ' nopos'}" role="option" aria-selected="${isSel(v) ? 'true' : 'false'}" data-locate="${v.imei}" title="${where ? 'Газрын зураг дээр харуулах' : 'Байршил ирээгүй'}">
       <i class="ml-dot st-${v.status}${sev ? ' ring-' + sev : ''}" aria-hidden="true"></i>
       <span class="ml-main"><b>${v.shortName}</b><small>${groupLabel(v.group)} · ${where ? sub : 'байршилгүй'}</small></span>
       <span class="ml-side">${pct !== null ? html`<span class="ml-fuel${pct < 15 ? ' low' : ''}">${fmtNum(clamp(pct, 0, 100))}%</span>` : ''}${sev ? html`<span class="badges">${alertBadges(v.activeAlerts, v.muted)}</span>` : ''}</span>
-    </button>`;
+    </button>${pickBtn}</div>`;
   })}${all.length > list.length ? html`<div class="ml-more muted small">Эхний ${fmtNum(MAP_LIST_MAX)}-г харуулж байна. Хайлтаа нарийсгана уу.</div>` : ''}`);
 }
 /** Show one truck on the map: fly to it, ring it and open its card. A filter that hides it is
@@ -2954,6 +2969,15 @@ function bindStatic() {
     }
   });
   $('#map-list').addEventListener('click', (e) => {
+    const pb = e.target.closest('[data-pick]');
+    if (pb) {
+      const id = pb.dataset.pick;
+      const list = S.map.trailPick;
+      S.map.trailPick = list.includes(id) ? list.filter((x) => x !== id) : list.length >= TRAIL_COLORS.length ? list : [...list, id];
+      renderMapList();
+      drawTrails();
+      return;
+    }
     const r = e.target.closest('[data-locate]');
     if (!r) return;
     selectOnMap(r.dataset.locate);
@@ -2966,9 +2990,18 @@ function bindStatic() {
   });
   $('#map-fit').addEventListener('click', fitMap);
   $('#map-trail').value = String(S.map.trail || 0);
+  $('#map-trail-day').hidden = S.map.trail !== 'day';
+  $('#map-trail-day').value = trailDayValue();
+  $('#map-trail-day').max = trailDayValue();
   $('#map-trail').addEventListener('change', (e) => {
-    S.map.trail = Number(e.target.value) || 0;
+    S.map.trail = e.target.value === 'day' ? 'day' : Number(e.target.value) || 0;
     savePref('mapTrail', S.map.trail);
+    $('#map-trail-day').hidden = S.map.trail !== 'day';
+    loadTrails();
+  });
+  $('#map-trail-day').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    S.map.trailDay = e.target.value;
     loadTrails();
   });
   setInterval(() => { if (S.map.trail && S.view === 'map' && !document.hidden) loadTrails(true); }, 5 * 60e3);

@@ -313,7 +313,7 @@ export function createHandler({ cfg, engine, poller, notifier, hub, ledger, look
     if (m === 'GET' && p === '/api/vehicles') return send(res, 200, engine.vehiclesView());
     // named places for the map, from the admin web's Газрууд page (opentee.js)
     // every truck's path for the fleet map trails (src/tracks.js)
-    if (m === 'GET' && p === '/api/tracks') return send(res, 200, engine.tracks(intParam(q.get('hours')) ?? 24));
+    if (m === 'GET' && p === '/api/tracks') return send(res, 200, engine.tracks(intParam(q.get('hours')) ?? 24, intParam(q.get('dayFrom'))));
     if (m === 'GET' && p === '/api/places') return send(res, 200, { places: openTee?.places() ?? [] });
     if (seg[0] === 'vehicles' && seg[1]) {
       const imei = seg[1];

@@ -1578,20 +1578,25 @@ export class Engine {
    * trails. Each truck: its thinned path, the places it stood 20 min or more and the km driven.
    * Read from the local samples table, cached for 2 minutes per period.
    */
-  tracks(hours) {
-    const h = clamp(num(hours) ?? 24, 1, 72);
+  tracks(hours, dayFrom = null) {
     const now = Date.now();
-    const hit = this._tracksCache?.get(h);
+    // either the last `hours` (1..72) or one day from `dayFrom` (ms, local midnight from the page)
+    const day = Number.isFinite(dayFrom) && dayFrom < now && dayFrom > now - 62 * 24 * HOUR ? Math.round(dayFrom) : null;
+    const h = day === null ? clamp(num(hours) ?? 24, 1, 72) : 24;
+    const key = day === null ? `h${h}` : `d${day}`;
+    const hit = this._tracksCache?.get(key);
     if (hit && now - hit.at < 120e3) return hit.data;
-    const from = now - h * HOUR;
+    const from = day ?? now - h * HOUR;
+    const to = day === null ? now : Math.min(day + 24 * HOUR, now);
     const tracks = [];
     for (const imei of this.recs.keys()) {
-      const r = routeOf(this.db.samplesRange(imei, from, now), h > 24 ? 600 : 400);
+      const r = routeOf(this.db.samplesRange(imei, from, to), h > 24 ? 600 : 400);
       if (r.pts.length > 1 || r.stops.length) tracks.push({ imei, ...r });
     }
-    const data = { from, to: now, hours: h, tracks };
+    const data = { from, to, hours: h, tracks };
     if (!this._tracksCache) this._tracksCache = new Map();
-    this._tracksCache.set(h, { at: now, data });
+    if (this._tracksCache.size > 20) this._tracksCache.clear();
+    this._tracksCache.set(key, { at: now, data });
     return data;
   }
 
