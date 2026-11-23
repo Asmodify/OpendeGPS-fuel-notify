@@ -1424,8 +1424,12 @@ export class VehicleDetector {
         this.sensorLost = null;
         if (lost.alertId != null) {
           this.update(lost.alertId, { ongoing: false });
+          // the level when it stopped and now, in litres only (an uncalibrated tank gives none)
+          const a = lost.levelMv != null ? this.litres(lost.levelMv, cal) : null;
+          const b = this.litres(s.f, cal);
+          const levels = a != null && b != null ? ` Fuel ${Math.round(a)} L before, ${Math.round(b)} L after.` : '';
           this.alert(s, 'sensor_restored', 'Fuel sensor working again',
-            `Fuel sensor reads normally again (${Math.round(s.f)} mV) after ${fmtDuration(this.goodSince - lost.since)} without a valid signal.`,
+            `Fuel sensor reads normally again (${Math.round(s.f)} mV) after ${fmtDuration(this.goodSince - lost.since)} without a valid signal.${levels}`,
             { fromT: this.goodSince });
         }
       }
@@ -1447,7 +1451,7 @@ export class VehicleDetector {
           }
           return;
         }
-        this.sensorLost = { since: this.badSince, alertId: null };
+        this.sensorLost = { since: this.badSince, alertId: null, levelMv: this.level ?? null };
         if (this.level != null && this.level >= th.sensorMinValidMv + 300) {
           this.sensorLost.alertId = this.alert(s, 'sensor_lost', 'Fuel sensor not reading',
             `Fuel sensor reads ${Math.round(s.f)} mV while the vehicle has power - cut wire, unplugged or failed sensor. ` +
