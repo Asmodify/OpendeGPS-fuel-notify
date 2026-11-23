@@ -1078,6 +1078,50 @@ const markers = new Map();
 let mapFitted = false;
 const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+// Street map (OpenStreetMap) or satellite photo (Esri World Imagery, free, no key) with Esri
+// roads and place names on top. The choice is remembered in this browser.
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
+const BASE_KEY = 'fuel_map_base';
+function addBaseLayers(map) {
+  let cur = 'map';
+  try { if (localStorage.getItem(BASE_KEY) === 'satellite') cur = 'satellite'; } catch { /* private window */ }
+  const nat = { maxZoom: 19, maxNativeZoom: 18 };
+  const layers = {
+    map: L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }),
+    satellite: L.layerGroup([
+      L.tileLayer(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`, { ...nat, attribution: 'Esri, Maxar, Earthstar Geographics' }),
+      L.tileLayer(`${ESRI}/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}`, { ...nat, opacity: 0.7 }),
+      L.tileLayer(`${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`, nat),
+    ]),
+  };
+  layers[cur].addTo(map);
+  const Switch = L.Control.extend({
+    onAdd() {
+      const box = L.DomUtil.create('div', 'leaflet-bar base-switch');
+      const btns = [['map', 'Газрын зураг'], ['satellite', 'Хиймэл дагуул']].map(([key, label]) => {
+        const b = L.DomUtil.create('button', '', box);
+        b.type = 'button';
+        b.textContent = label;
+        b.dataset.key = key;
+        return b;
+      });
+      const paint = () => btns.forEach((b) => b.setAttribute('aria-pressed', b.dataset.key === cur ? 'true' : 'false'));
+      btns.forEach((b) => L.DomEvent.on(b, 'click', (e) => {
+        L.DomEvent.stop(e);
+        if (b.dataset.key === cur) return;
+        map.removeLayer(layers[cur]);
+        cur = b.dataset.key;
+        layers[cur].addTo(map);
+        try { localStorage.setItem(BASE_KEY, cur); } catch { /* private window */ }
+        paint();
+      }));
+      L.DomEvent.disableClickPropagation(box);
+      paint();
+      return box;
+    },
+  });
+  new Switch({ position: 'topright' }).addTo(map);
+}
 function ensureMap() {
   if (mapObj) return true;
   if (!window.L) {
@@ -1087,7 +1131,7 @@ function ensureMap() {
     return false;
   }
   mapObj = L.map('map', { zoomControl: true, worldCopyJump: false }).setView([46.8, 103.8], 5);
-  L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }).addTo(mapObj);
+  addBaseLayers(mapObj);
   S.placesLayer = L.layerGroup().addTo(mapObj);
   drawPlaces(S.placesLayer);
   followPlaces(mapObj);
@@ -2567,7 +2611,7 @@ function initDetailMap() {
   if (!d) return;
   if (!window.L) { el.classList.add('no-map'); el.textContent = 'Газрын зураг байхгүй (газрын зургийг ачаалах интернэт холболт алга).'; return; }
   d.map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true }).setView([46.8, 103.8], 5);
-  L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }).addTo(d.map);
+  addBaseLayers(d.map);
   d.placesLayer = L.layerGroup().addTo(d.map);
   drawPlaces(d.placesLayer);
   followPlaces(d.map);
