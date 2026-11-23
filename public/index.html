@@ -183,6 +183,14 @@
         <div class="map-wrap">
           <div id="map" class="map"></div>
           <div class="map-tools">
+            <select id="map-trail" class="small" aria-label="Явсан зам" title="Машин бүр хаагуур явсныг өөр өнгөөр зурна">
+              <option value="0">Явсан зам: харуулахгүй</option>
+              <option value="6">Явсан зам: сүүлийн 6 цаг</option>
+              <option value="24">Явсан зам: сүүлийн 24 цаг</option>
+              <option value="72">Явсан зам: сүүлийн 3 хоног</option>
+              <option value="day">Явсан зам: өдөр сонгох</option>
+            </select>
+            <input type="date" id="map-trail-day" class="small" aria-label="Өдөр" hidden>
             <button type="button" class="btn small" id="map-fit"><svg class="ic"><use href="#i-expand"/></svg>Бүгдийг харуулах</button>
           </div>
           <div class="map-legend" aria-label="Тайлбар">

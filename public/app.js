@@ -112,7 +112,7 @@ const S = {
   es: null,
   sseDropped: false,
   fleet: savedFleetFilters(),
-  map: { filter: loadView('mapFilter', 'all'), group: loadView('mapGroup', ''), names: loadPref('mapNames', false), q: '', sel: null, active: 0 },
+  map: { filter: loadView('mapFilter', 'all'), group: loadView('mapGroup', ''), names: loadPref('mapNames', false), trail: loadPref('mapTrail', 0), trailDay: '', trailPick: [], q: '', sel: null, active: 0 },
   alerts: {
     list: [], loading: false, error: null, hasMore: false, loaded: false, newIds: new Set(),
     f: savedAlertFilters(),
@@ -1078,6 +1078,50 @@ const markers = new Map();
 let mapFitted = false;
 const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+// Street map (OpenStreetMap) or satellite photo (Esri World Imagery, free, no key) with Esri
+// roads and place names on top. The choice is remembered in this browser.
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
+const BASE_KEY = 'fuel_map_base';
+function addBaseLayers(map, position = 'topright') {
+  let cur = 'map';
+  try { if (localStorage.getItem(BASE_KEY) === 'satellite') cur = 'satellite'; } catch { /* private window */ }
+  const nat = { maxZoom: 19, maxNativeZoom: 18 };
+  const layers = {
+    map: L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }),
+    satellite: L.layerGroup([
+      L.tileLayer(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`, { ...nat, attribution: 'Esri, Maxar, Earthstar Geographics' }),
+      L.tileLayer(`${ESRI}/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}`, { ...nat, opacity: 0.7 }),
+      L.tileLayer(`${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`, nat),
+    ]),
+  };
+  layers[cur].addTo(map);
+  const Switch = L.Control.extend({
+    onAdd() {
+      const box = L.DomUtil.create('div', 'leaflet-bar base-switch');
+      const btns = [['map', 'Газрын зураг'], ['satellite', 'Хиймэл дагуул']].map(([key, label]) => {
+        const b = L.DomUtil.create('button', '', box);
+        b.type = 'button';
+        b.textContent = label;
+        b.dataset.key = key;
+        return b;
+      });
+      const paint = () => btns.forEach((b) => b.setAttribute('aria-pressed', b.dataset.key === cur ? 'true' : 'false'));
+      btns.forEach((b) => L.DomEvent.on(b, 'click', (e) => {
+        L.DomEvent.stop(e);
+        if (b.dataset.key === cur) return;
+        map.removeLayer(layers[cur]);
+        cur = b.dataset.key;
+        layers[cur].addTo(map);
+        try { localStorage.setItem(BASE_KEY, cur); } catch { /* private window */ }
+        paint();
+      }));
+      L.DomEvent.disableClickPropagation(box);
+      paint();
+      return box;
+    },
+  });
+  new Switch({ position }).addTo(map);
+}
 function ensureMap() {
   if (mapObj) return true;
   if (!window.L) {
@@ -1087,7 +1131,9 @@ function ensureMap() {
     return false;
   }
   mapObj = L.map('map', { zoomControl: true, worldCopyJump: false }).setView([46.8, 103.8], 5);
-  L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }).addTo(mapObj);
+  addBaseLayers(mapObj, 'topleft');
+  S.trailLayer = L.layerGroup().addTo(mapObj);
+  if (S.map.trail) setTimeout(() => loadTrails(), 0);
   S.placesLayer = L.layerGroup().addTo(mapObj);
   drawPlaces(S.placesLayer);
   followPlaces(mapObj);
@@ -1215,13 +1261,89 @@ function renderMap() {
     else if (!label && m.getTooltip()) m.unbindTooltip();
   }
   for (const [imei, m] of markers) if (!shown.has(imei)) { m.remove(); markers.delete(imei); }
+  drawTrails(shown);
   if (!mapFitted && S.vehiclesLoaded) { fitMap(); mapFitted = true; }
   $$('#map-filter button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.f === S.map.filter)));
   $('#map-names').checked = !!S.map.names;
 }
+// ---- trails: where each truck went in the last 6 h / 24 h / 3 days ----------------------------
+// One colour per truck (the colour has no other meaning), a ring where it started and a square
+// where it stood 20 min or more. The selected truck's trail is drawn bold, the rest faded.
+const TRAIL_COLORS = ['#1f6fd1', '#d1361f', '#1f9e55', '#8a3ffc', '#e07800', '#0f8b8d', '#c0267a', '#5b6b00', '#6f4e37', '#2a2f8f'];
+function trailColor(imei) {
+  const k = S.map.trailPick.indexOf(String(imei));
+  if (k >= 0) return TRAIL_COLORS[k % TRAIL_COLORS.length];
+  let h = 0;
+  for (const ch of String(imei)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return TRAIL_COLORS[h % TRAIL_COLORS.length];
+}
+let trailReq = 0;
+async function loadTrails(force = false) {
+  const h = S.map.trail === 'day' ? `day:${trailDayValue()}` : Number(S.map.trail) || 0;
+  if (!h) { S.trails = null; drawTrails(); renderMapList(); return; }
+  if (!force && S.trails?.hours === h && Date.now() - S.trails.loadedAt < 5 * 60e3) { drawTrails(); return; }
+  const q = S.map.trail === 'day' ? `dayFrom=${new Date(`${trailDayValue()}T00:00:00`).getTime()}` : `hours=${h}`;
+  const req = ++trailReq;
+  const sel = $('#map-trail');
+  sel?.classList.add('loading');
+  try {
+    const data = await api(`/api/tracks?${q}`, { timeout: 90000 });
+    if (req !== trailReq) return;
+    const first = !S.trails || S.trails.hours !== h;
+    S.trails = { hours: h, loadedAt: Date.now(), byImei: new Map((data?.tracks || []).map((t) => [String(t.imei), t])) };
+    if (first) { drawTrails(); fitMap(); }
+  } catch (e) {
+    if (req === trailReq) toast({ sev: 'warning', title: 'Явсан замыг ачаалж чадсангүй', body: e?.message || '' });
+  } finally {
+    if (req === trailReq) sel?.classList.remove('loading');
+  }
+  drawTrails();
+  renderMapList();
+}
+/** The chosen day for 'Өдөр': today unless another day was picked. */
+function trailDayValue() {
+  if (S.map.trailDay) return S.map.trailDay;
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function drawTrails(shown = null) {
+  if (!S.trailLayer) return;
+  S.trailLayer.clearLayers();
+  if (!S.map.trail || !S.trails) return;
+  const show = shown || new Set(markers.keys());
+  const sel = S.map.sel;
+  // trucks picked with "Зам" in the list: only those (and the selected one); none picked: all shown
+  const pick = S.map.trailPick;
+  for (const [imei, t] of S.trails.byImei) {
+    if (!show.has(imei)) continue;
+    if (pick.length && !pick.includes(imei) && sel !== imei) continue;
+    const v = S.byImei.get(imei);
+    const name = v?.shortName || imei;
+    const c = trailColor(imei);
+    const on = !sel || sel === imei;
+    const pts = (t.pts || []).map((p) => [p[1], p[2]]);
+    if (pts.length > 1) {
+      L.polyline(pts, { color: c, weight: sel === imei ? 5 : 3, opacity: on ? 0.85 : 0.18 })
+        .bindTooltip(esc(`${name} · ${fmtNum(t.km)} км · ${fmtTime(t.pts[0][0], now())}-с хойш`), { sticky: true })
+        .on('click', () => selectOnMap(imei, false))
+        .addTo(S.trailLayer);
+      L.circleMarker(pts[0], { radius: 5, color: c, weight: 2, fillColor: cssVar('--surface'), opacity: on ? 1 : 0.25, fillOpacity: on ? 1 : 0.25 })
+        .bindTooltip(esc(`${name}: эхэлсэн ${fmtFull(t.pts[0][0])}`))
+        .addTo(S.trailLayer);
+    }
+    if (on) for (const [t0, t1, lat, lng] of t.stops || []) {
+      L.marker([lat, lng], { icon: L.divIcon({ className: '', html: `<i class="trail-stop" style="border-color:${c}"></i>`, iconSize: [10, 10], iconAnchor: [5, 5] }), keyboard: false, zIndexOffset: -1000 })
+        .bindTooltip(esc(`${name}: зогссон ${fmtFull(t0)} – ${fmtFull(t1)} (${fmtDur(t1 - t0)})`))
+        .addTo(S.trailLayer);
+    }
+  }
+}
+
 function fitMap() {
   if (!mapObj) return;
   const pts = [...markers.values()].map((m) => m.getLatLng());
+  // with trails on, the whole of every shown trail fits too
+  if (S.map.trail && S.trailLayer) S.trailLayer.eachLayer((l) => { if (l.getBounds) { const b = l.getBounds(); if (b.isValid()) pts.push(b.getNorthEast(), b.getSouthWest()); } });
   if (!pts.length) return;
   if (pts.length === 1) mapObj.setView(pts[0], 12);
   else mapObj.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 12 });
@@ -1260,11 +1382,13 @@ function renderMapList() {
     const pct = v.hasFuel ? fuelPct(v) : null;
     const where = validLatLng(v);
     const sub = v.status === 'moving' && v.speed !== null ? `${fmtNum(v.speed)} км/ц` : STATUS[v.status].label;
-    return html`<button type="button" class="ml-row${isSel(v) ? ' sel' : ''}${q && i === S.map.active ? ' active' : ''}${where ? '' : ' nopos'}" role="option" aria-selected="${isSel(v) ? 'true' : 'false'}" data-locate="${v.imei}" title="${where ? 'Газрын зураг дээр харуулах' : 'Байршил ирээгүй'}">
+    const picked = S.map.trailPick.includes(v.imei);
+    const pickBtn = S.map.trail ? html`<button type="button" class="ml-pick" data-pick="${v.imei}" aria-pressed="${picked ? 'true' : 'false'}" title="Зөвхөн сонгосон машинуудын замыг зурах" ${picked ? raw(`style="background:${trailColor(v.imei)};border-color:${trailColor(v.imei)};color:#fff"`) : ''}>Зам</button>` : '';
+    return html`<div class="ml-item"><button type="button" class="ml-row${isSel(v) ? ' sel' : ''}${q && i === S.map.active ? ' active' : ''}${where ? '' : ' nopos'}" role="option" aria-selected="${isSel(v) ? 'true' : 'false'}" data-locate="${v.imei}" title="${where ? 'Газрын зураг дээр харуулах' : 'Байршил ирээгүй'}">
       <i class="ml-dot st-${v.status}${sev ? ' ring-' + sev : ''}" aria-hidden="true"></i>
       <span class="ml-main"><b>${v.shortName}</b><small>${groupLabel(v.group)} · ${where ? sub : 'байршилгүй'}</small></span>
       <span class="ml-side">${pct !== null ? html`<span class="ml-fuel${pct < 15 ? ' low' : ''}">${fmtNum(clamp(pct, 0, 100))}%</span>` : ''}${sev ? html`<span class="badges">${alertBadges(v.activeAlerts, v.muted)}</span>` : ''}</span>
-    </button>`;
+    </button>${pickBtn}</div>`;
   })}${all.length > list.length ? html`<div class="ml-more muted small">Эхний ${fmtNum(MAP_LIST_MAX)}-г харуулж байна. Хайлтаа нарийсгана уу.</div>` : ''}`);
 }
 /** Show one truck on the map: fly to it, ring it and open its card. A filter that hides it is
@@ -2483,6 +2607,7 @@ async function loadDetail(keepView = false) {
     const to = now();
     d.data = {
       track: Array.isArray(data?.track) ? data.track : [],
+      stops: Array.isArray(data?.stops) ? data.stops : [],
       samples: Array.isArray(data?.samples) ? data.samples : [],
       levels: Array.isArray(data?.levels) ? data.levels : [],
       alerts: (Array.isArray(data?.alerts) ? data.alerts : []).map(normAlert).sort((a, b) => (b.t ?? 0) - (a.t ?? 0)),
@@ -2567,7 +2692,7 @@ function initDetailMap() {
   if (!d) return;
   if (!window.L) { el.classList.add('no-map'); el.textContent = 'Газрын зураг байхгүй (газрын зургийг ачаалах интернэт холболт алга).'; return; }
   d.map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true }).setView([46.8, 103.8], 5);
-  L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }).addTo(d.map);
+  addBaseLayers(d.map);
   d.placesLayer = L.layerGroup().addTo(d.map);
   drawPlaces(d.placesLayer);
   followPlaces(d.map);
@@ -2592,6 +2717,14 @@ function updateDetailMap() {
   // Route driven in the chart period (history.track = [[t, lat, lng, speed], ...])
   const pts = (d.data?.track || []).filter((p) => Array.isArray(p) && isNum(p[1]) && isNum(p[2]) && !(Number(p[1]) === 0 && Number(p[2]) === 0)).map((p) => [Number(p[1]), Number(p[2])]);
   if (pts.length > 1) L.polyline(pts, { color: cssVar('--accent'), weight: 3, opacity: 0.7, interactive: false }).addTo(d.alertLayer);
+  if (pts.length > 1) L.circleMarker(pts[0], { radius: 5, color: cssVar('--accent'), weight: 2, fillColor: cssVar('--surface'), fillOpacity: 1 })
+    .bindTooltip(esc(`Энэ хугацааны эхэнд энд байсан`)).addTo(d.alertLayer);
+  for (const [t0, t1, lat, lng] of d.data?.stops || []) {
+    L.marker([lat, lng], { icon: L.divIcon({ className: '', html: `<i class="trail-stop" style="border-color:${cssVar('--accent')}"></i>`, iconSize: [10, 10], iconAnchor: [5, 5] }), keyboard: false })
+      .bindTooltip(esc(`Зогссон ${fmtFull(t0)} – ${fmtFull(t1)} (${fmtDur(t1 - t0)})`))
+      .on('click', () => focusChartOn(t0))
+      .addTo(d.alertLayer);
+  }
   if (!d.centered || (pts.length > 1 && !d.trackFitted)) {
     if (pts.length > 1) { d.map.fitBounds(L.latLngBounds([...pts, [v.lat, v.lng]]), { padding: [18, 18], maxZoom: 13 }); d.trackFitted = true; }
     else d.map.setView([v.lat, v.lng], 12);
@@ -2836,6 +2969,15 @@ function bindStatic() {
     }
   });
   $('#map-list').addEventListener('click', (e) => {
+    const pb = e.target.closest('[data-pick]');
+    if (pb) {
+      const id = pb.dataset.pick;
+      const list = S.map.trailPick;
+      S.map.trailPick = list.includes(id) ? list.filter((x) => x !== id) : list.length >= TRAIL_COLORS.length ? list : [...list, id];
+      renderMapList();
+      drawTrails();
+      return;
+    }
     const r = e.target.closest('[data-locate]');
     if (!r) return;
     selectOnMap(r.dataset.locate);
@@ -2847,6 +2989,22 @@ function bindStatic() {
     renderMap();
   });
   $('#map-fit').addEventListener('click', fitMap);
+  $('#map-trail').value = String(S.map.trail || 0);
+  $('#map-trail-day').hidden = S.map.trail !== 'day';
+  $('#map-trail-day').value = trailDayValue();
+  $('#map-trail-day').max = trailDayValue();
+  $('#map-trail').addEventListener('change', (e) => {
+    S.map.trail = e.target.value === 'day' ? 'day' : Number(e.target.value) || 0;
+    savePref('mapTrail', S.map.trail);
+    $('#map-trail-day').hidden = S.map.trail !== 'day';
+    loadTrails();
+  });
+  $('#map-trail-day').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    S.map.trailDay = e.target.value;
+    loadTrails();
+  });
+  setInterval(() => { if (S.map.trail && S.view === 'map' && !document.hidden) loadTrails(true); }, 5 * 60e3);
 
   // Alerts
   $('#a-sev').addEventListener('click', (e) => {

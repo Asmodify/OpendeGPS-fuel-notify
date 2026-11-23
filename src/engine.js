@@ -11,6 +11,7 @@ import { gapCases, roomCases, sensorDay, sensorCase, dayBalance, balanceCase, tr
 import { mnTitle, mnDetail, mnAlertTypes } from './mn.js';
 import { secondOpinion, opinionText, meterLine, officerOn, OFFICER_MONTHLY_MAX } from './officer.js';
 import { odoStepOk, motionStatsOf, sliceByTime } from './motion.js';
+import { routeOf } from './tracks.js';
 import {
   RECEIPTS_KEY, RECEIPTS_MAX, MISSING_MIN_L, MISSING_MIN_PCT, parseReceiptText, receiptId, refuelsFromRows, matchReceipts, receiptTotals, localMs,
 } from './receipts.js';
@@ -1568,7 +1569,35 @@ export class Engine {
       levels: this.db.levelsRange(imei, from, to).map((r) => [r.t, round(r.mv)]),
       alerts: this.queryAlerts({ imei, since: from, limit: 2000 }),
       track: thinTrack(rows, 1500),
+      stops: routeOf(rows).stops,
     };
+  }
+
+  /**
+   * GET /api/tracks?hours=: where every truck went in the last hours (1..72), for the fleet map
+   * trails. Each truck: its thinned path, the places it stood 20 min or more and the km driven.
+   * Read from the local samples table, cached for 2 minutes per period.
+   */
+  tracks(hours, dayFrom = null) {
+    const now = Date.now();
+    // either the last `hours` (1..72) or one day from `dayFrom` (ms, local midnight from the page)
+    const day = Number.isFinite(dayFrom) && dayFrom < now && dayFrom > now - 62 * 24 * HOUR ? Math.round(dayFrom) : null;
+    const h = day === null ? clamp(num(hours) ?? 24, 1, 72) : 24;
+    const key = day === null ? `h${h}` : `d${day}`;
+    const hit = this._tracksCache?.get(key);
+    if (hit && now - hit.at < 120e3) return hit.data;
+    const from = day ?? now - h * HOUR;
+    const to = day === null ? now : Math.min(day + 24 * HOUR, now);
+    const tracks = [];
+    for (const imei of this.recs.keys()) {
+      const r = routeOf(this.db.samplesRange(imei, from, to), h > 24 ? 600 : 400);
+      if (r.pts.length > 1 || r.stops.length) tracks.push({ imei, ...r });
+    }
+    const data = { from, to, hours: h, tracks };
+    if (!this._tracksCache) this._tracksCache = new Map();
+    if (this._tracksCache.size > 20) this._tracksCache.clear();
+    this._tracksCache.set(key, { at: now, data });
+    return data;
   }
 
   /**
