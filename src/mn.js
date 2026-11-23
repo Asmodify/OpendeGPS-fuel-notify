@@ -126,7 +126,7 @@ const DETAIL_PATTERNS = [
   [new RegExp(`Fuel fell by (.+?) while ${POWER_OFF} was off \\(about (.+?) before the power was cut, (.+?) after it came back\\)\\.`, 'g'),
     'Машины тэжээл (масс таслуур) унтраатай байхад түлш $1 буурсан (тэжээл тасрахаас өмнө ойролцоогоор $2, тэжээл орсны дараа $3).'],
   [/Fuel fell by (.+?) over (.+?) \((.+?)\); ([\d.]+) engine-hours( and (\d+) km driven while the tracker was silent)? explain at most (.+?)\./g,
-    (_, amt, dur, lv, eh, unseen, km, max) => `${dur} хугацаанд түлш ${amt} буурсан (${lv}); хөдөлгүүрийн ${eh} цаг${unseen ? ` болон трекер чимээгүй байхад явсан ${km} км` : ''} нь хамгийн ихдээ ${max} зарцуулалтыг тайлбарлана.`],
+    (_, amt, dur, lv, eh, unseen, km, max) => `${dur} хугацаанд түлш ${amt} буурсан (${lv}); хөдөлгүүрийн ${eh} цаг${unseen ? ` болон трекер ажиллахгүй байхад явсан ${km} км` : ''} нь хамгийн ихдээ ${max} зарцуулалтыг тайлбарлана.`],
   // ---- refuels (detector.js) ----
   [/Fuel rose by (.+?) while stopped \((.+?)\)\./g, 'Зогсож байхад түлш $1 нэмэгдсэн ($2).'],
   [new RegExp(`Fuel rose by about (.+?) at a stop( with ${POWER_OFF} off)? \\(about (.+?) before, about (.+?) while driving on\\)\\.`, 'g'),
@@ -174,9 +174,9 @@ const DETAIL_PATTERNS = [
     (_, dur, last, spd) => `${dur} хугацаанд мэдээлэл ирээгүй (сүүлийн мэдээ ${last}, ${spd ? `${spd} км/ц хурдтай явж байсан` : 'зогссон байсан'}).`],
   [/ ?Possible causes: no mobile coverage, tracker unplugged or powered off\./g, ' Боломжит шалтгаан: сүлжээгүй газар, трекерийг салгасан эсвэл унтраасан.'],
   [/No data from (.+?) until (.+?) \((.+?)\)\./g, 'Мэдээлэл ирээгүй хугацаа: $1 – $2 ($3).'],
-  [/Reporting again after (.+?) without data \(silent since (.+?)\)\./g, '$1 мэдээлэлгүй байсны дараа дахин мэдээлж эхэлсэн (чимээгүй болсон: $2).'],
-  [/Fuel (.+?) before, (.+?) after( \(the vehicle moved meanwhile\))?\./g,
-    (_, a, b, moved) => `Түлш өмнө нь ${a}, дараа нь ${b}${moved ? ' (энэ хооронд машин хөдөлсөн)' : ''}.`],
+  [/Reporting again after (.+?) without data \(silent since (.+?)\)\./g, '$1 мэдээлэлгүй байсны дараа дахин мэдээлж эхэлсэн ($2-аас хойш ажиллахгүй байсан).'],
+  [/Fuel (.+?) before, (.+?) after( \(the vehicle moved(?: about (\d+) km)? meanwhile\))?\./g,
+    (_, a, b, moved, km) => `Түлш өмнө нь ${a}, дараа нь ${b}${moved ? (km ? ` (энэ хооронд машин ойролцоогоор ${km} км явсан)` : ' (энэ хооронд машин хөдөлсөн)') : ''}.`],
   // ---- fuel receipts (engine.js checkReceipts) ----
   [/Fuel receipt for (.+?) \((.+?)\), but the tank rose only (.+?)(?: \(([^()]+ → [^()]+)\))? at (.+?): (.+?) missing\./g,
     (_, r, when, got, lv, at, miss) => `Түлшний баримт ${r} (${when}), гэвч ${at} үед сав ердөө ${got} нэмэгдсэн${lv ? ` (${lv})` : ''}: ${miss} дутуу.`],

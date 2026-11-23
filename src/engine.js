@@ -600,12 +600,17 @@ export class Engine {
         // this outage's alert only; one outage never closes another
         const open = this.db.ongoingAlerts(rec.imei, 'offline').filter((row) => (row.from_t ?? from) === from);
         if (rec.outage?.alerted || open.length) {
+          // the fuel level before it went quiet and now, in litres (staff want to see it on every return)
+          const f = this.outageFuel(rec, rec.outage);
           this.raiseAlert({
             imei: rec.imei, name: rec.v.name, type: 'back_online', severity: 'info', t: i.lastSeen, fromT: from,
             lat: i.lat, lng: i.lng,
             title: 'Tracker back online',
-            detail: `Reporting again after ${fmtDuration(i.lastSeen - from)} without data (silent since ${fmtLocal(from, tz)}).`,
+            detail: `Reporting again after ${fmtDuration(i.lastSeen - from)} without data (silent since ${fmtLocal(from, tz)}).` +
+              (f?.hasL ? ` ${f.sentence}` : ''),
           }, 'live');
+          // more fuel gone than the silence explains: its own critical alert
+          if (rec.outage) this.checkOutageFuel(rec, rec.outage, true);
           for (const row of open) {
             this.patchAlert(row.id, {
               ongoing: false,
@@ -662,34 +667,49 @@ export class Engine {
     return { from: i.lastSeen, mv, lat: i.lat ?? null, lng: i.lng ?? null, alerted: false };
   }
 
-  /** A silence shorter than OFFLINE_ALERT_MS just ended: alert it only if the fuel level changed
-   *  across it by more than the usual thresholds (plus normal consumption if it drove unseen). */
-  checkOutageFuel(rec, o) {
+  /** The fuel level across a silence that just ended: before / after, the change and how much
+   *  of it normal driving or standing could explain. null when either level is unknown. */
+  outageFuel(rec, o) {
     const i = rec.info;
-    if (!rec.v.hasFuel || !Number.isFinite(o.mv)) return;
+    if (!rec.v.hasFuel || !o || !Number.isFinite(o.mv)) return null;
     const th = this.settingsFor(rec.imei).th;
     const mv = i.fuelRaw;
-    if (!Number.isFinite(mv) || mv < (th.sensorMinValidMv ?? 100)) return;
+    if (!Number.isFinite(mv) || mv < (th.sensorMinValidMv ?? 100)) return null;
     const hours = (i.lastSeen - o.from) / HOUR;
     const known = [o.lat, o.lng, i.lat, i.lng].every(Number.isFinite);
-    const moved = !known || haversineM(o.lat, o.lng, i.lat, i.lng) > 500;
+    const km = known ? haversineM(o.lat, o.lng, i.lat, i.lng) / 1000 : null;
+    const moved = !known || km > 0.5;
     // the reading now is a single raw sample: more slosh while driving
     const margin = (i.speed ?? 0) >= 3 ? 300 : 0;
     const allowDrop = (moved ? th.drainTripMv + th.consumptionMvPerHour * hours * 1.5 : th.drainParkedMv) + margin;
     const allowRise = th.refuelMv + margin;
-    const diff = mv - o.mv;
-    if (diff > -allowDrop && diff < allowRise) return;
-    const tz = this.cfg.timezone;
     const cal = this.vehicleCal(rec.imei);
     const hasL = !!(cal.tankLiters || (Array.isArray(cal.table) && cal.table.length >= 2));
     const fmt = (x) => (hasL ? `${round(this.litersAt(x, cal), 0)} L` : `${Math.round(x)} mV`);
-    const drop = diff < 0;
+    const movedText = moved ? (km !== null ? ` (the vehicle moved about ${Math.round(km)} km meanwhile)` : ' (the vehicle moved meanwhile)') : '';
+    return {
+      before: o.mv, after: mv, diff: mv - o.mv, allowDrop, allowRise, hasL, fmt, moved,
+      sentence: `Fuel ${fmt(o.mv)} before, ${fmt(mv)} after${movedText}.`,
+    };
+  }
+
+  /** A silence just ended: alert it if the fuel level changed across it by more than the usual
+   *  thresholds (plus normal consumption if it drove unseen). A short silence is only alerted
+   *  this way; after a long one (already alerted as offline) only a drop or rise in litres is
+   *  raised, as its own alert, so the offline alert's key stays its own. */
+  checkOutageFuel(rec, o, long = false) {
+    const i = rec.info;
+    const f = this.outageFuel(rec, o);
+    if (!f || (long && !f.hasL)) return;
+    if (f.diff > -f.allowDrop && f.diff < f.allowRise) return;
+    const tz = this.cfg.timezone;
+    const drop = f.diff < 0;
     this.raiseAlert({
       imei: rec.imei, name: rec.v.name, type: 'offline', severity: drop ? 'critical' : 'warning',
-      t: i.lastSeen, fromT: o.from, lat: i.lat, lng: i.lng, amountMv: Math.round(Math.abs(diff)),
+      t: i.lastSeen, fromT: o.from, lat: i.lat, lng: i.lng, amountMv: Math.round(Math.abs(f.diff)),
+      ...(long ? { key: `${rec.imei}:offline_fuel:${o.from}` } : {}),
       title: drop ? 'Fuel dropped while tracker was offline' : 'Fuel rose while tracker was offline',
-      detail: `No data from ${fmtLocal(o.from, tz)} until ${fmtLocal(i.lastSeen, tz)} (${fmtDuration(i.lastSeen - o.from)}). ` +
-        `Fuel ${fmt(o.mv)} before, ${fmt(mv)} after${moved ? ' (the vehicle moved meanwhile)' : ''}.`,
+      detail: `No data from ${fmtLocal(o.from, tz)} until ${fmtLocal(i.lastSeen, tz)} (${fmtDuration(i.lastSeen - o.from)}). ${f.sentence}`,
     }, 'live');
   }
 
