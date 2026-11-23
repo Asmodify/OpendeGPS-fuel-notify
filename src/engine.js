@@ -1590,7 +1590,7 @@ export class Engine {
     const to = day === null ? now : Math.min(day + 24 * HOUR, now);
     const tracks = [];
     for (const imei of this.recs.keys()) {
-      const r = routeOf(this.db.samplesRange(imei, from, to), h > 24 ? 600 : 400);
+      const r = routeOf(this.db.samplesRange(imei, from, to), h > 24 ? 2000 : 1200);
       if (r.pts.length > 1 || r.stops.length) tracks.push({ imei, ...r });
     }
     const data = { from, to, hours: h, tracks };
