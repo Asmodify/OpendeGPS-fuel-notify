@@ -9,7 +9,7 @@ import { validPos } from './refuelplaces.js';
 import { meterCheck, CONFIRMS, probeFault } from './meter.js';
 import { gapCases, roomCases, sensorDay, sensorCase, dayBalance, balanceCase, transferCases, afterfillCases, fitNorm, NORM_MIN_DAYS, NORM_KEEP_DAYS } from './autocheck.js';
 import { mnTitle, mnDetail, mnAlertTypes } from './mn.js';
-import { secondOpinion, opinionText, meterLine, officerOn, OFFICER_MONTHLY_MAX } from './officer.js';
+import { secondOpinion, opinionText, withoutOpinion, meterLine, officerOn, OFFICER_MONTHLY_MAX, OFFICER_VERDICT_MIN } from './officer.js';
 import { odoStepOk, motionStatsOf, sliceByTime } from './motion.js';
 import { routeOf } from './tracks.js';
 import {
@@ -1351,6 +1351,8 @@ export class Engine {
       verdict: VERDICTS.includes(row.verdict) ? row.verdict : 'unchecked',
       note: row.note ?? '',
       reviewedAt: row.reviewed_at ?? null,
+      // who gave the verdict: 'officer' = Автомат шалгалт (a person's click replaces it), else a person
+      reviewedBy: row.verdict && row.reviewed_by === 'officer' ? 'officer' : row.verdict ? 'person' : null,
       // a receipt the tank does not account for: the receipt's litres, what went in, what is missing
       ...(row.type === 'receipt_mismatch' ? { receipt: receiptOf(row.extra) } : {}),
     };
@@ -1387,7 +1389,9 @@ export class Engine {
       note = text || null;
     }
     const now = Date.now();
-    this.db.setReview(row.id, verdict === 'unchecked' ? null : verdict, note, now);
+    // a person's verdict (or undo) is the person's; a note alone keeps who gave the verdict
+    const by = body.verdict !== undefined ? null : row.reviewed_by ?? null;
+    this.db.setReview(row.id, verdict === 'unchecked' ? null : verdict, note, now, by);
     if (body.verdict !== undefined && verdict !== 'unchecked' && !row.acked) this.db.ackAlert(row.id, true, now);
     this.summaryCache.clear(); // the Report's totals leave out false alarms
     const view = this.alertView(this.db.getAlert(row.id));
@@ -1590,7 +1594,7 @@ export class Engine {
     const to = day === null ? now : Math.min(day + 24 * HOUR, now);
     const tracks = [];
     for (const imei of this.recs.keys()) {
-      const r = routeOf(this.db.samplesRange(imei, from, to), h > 24 ? 600 : 400);
+      const r = routeOf(this.db.samplesRange(imei, from, to), h > 24 ? 2000 : 1200);
       if (r.pts.length > 1 || r.stops.length) tracks.push({ imei, ...r });
     }
     const data = { from, to, hours: h, tracks };
@@ -1779,6 +1783,52 @@ export class Engine {
   }
 
   /**
+   * The officer's verdict on fuel-drop alerts (officer.js), at most once an hour: settled drops of
+   * the last 3 days (not pending, not ongoing, not a dip that came back, at least 3 h old) that
+   * nobody has marked and the officer has not judged yet. The first run also re-asks the
+   * Автомат шалгалт cases and drops of the last 14 days that only got an opinion without a verdict.
+   * Returns the number of alerts queued, or null when it was not due.
+   */
+  runOfficerSweep(now = Date.now()) {
+    if (!(officerOn() || this.secondOpinionFn) || !this.historyReady) return null;
+    if (this.officerSweepAt && now - this.officerSweepAt < HOUR) return null;
+    this.officerSweepAt = now;
+    const backfillKey = `${AUTOCHECK_KEY}:officer:verdict-backfill`;
+    const backfill = !this.db.getSetting(backfillKey, false);
+    if (backfill) this.db.setSetting(backfillKey, true);
+    const types = backfill ? ['fuel_drain', 'auto_check'] : ['fuel_drain'];
+    const ids = [];
+    for (const row of this.db.queryAlerts({ types, since: now - (backfill ? 14 : 3) * DAY, limit: 1000 })) {
+      if (row.verdict || this.officerAsked?.has(row.id)) continue;
+      const x = parseExtra(row.extra) || {};
+      if (x.officer && x.officer.verdict !== undefined) continue; // judged already
+      if (row.type === 'fuel_drain' && (isPendingDrain(row) || row.ongoing || row.severity === 'info' || row.t > now - 3 * HOUR)) continue;
+      ids.push(row.id);
+    }
+    if (ids.length) {
+      this.officerChain = (this.officerChain || Promise.resolve())
+        .then(() => this.secondOpinions(ids))
+        .catch((e) => log('error', 'Second opinion failed:', e));
+    }
+    return ids.length;
+  }
+
+  /** How the company's people judged earlier fuel alerts (for the officer): up to 30 of the last
+   *  60 days with a person's verdict, this truck's first, as [truck, alert, verdict, note]. */
+  officerExamples(imei, now = Date.now()) {
+    const label = { confirmed: 'Хулгай батлагдсан', false_alarm: 'Худал дохио' };
+    const rows = this.db.queryAlerts({ types: ['fuel_drain', 'auto_check'], since: now - 60 * DAY, limit: 1000 })
+      .filter((r) => label[r.verdict] && r.reviewed_by !== 'officer');
+    rows.sort((a, b) => (b.imei === imei) - (a.imei === imei) || b.t - a.t);
+    return rows.slice(0, 30).map((r) => [
+      this.recs.get(r.imei)?.v.name ?? r.imei,
+      `${mnTitle(r.title)}. ${withoutOpinion(mnDetail(r.detail))}`.slice(0, 300),
+      label[r.verdict],
+      r.note || '',
+    ]);
+  }
+
+  /**
    * Автомат шалгалт (autocheck.js): once a day, after 01:00 local, the day before. Returns the
    * number of cases raised, or null when it was not due. `force` runs it for `day` (YYYY-MM-DD,
    * local) whether due or not (tools, tests).
@@ -1894,16 +1944,19 @@ export class Engine {
     return raised;
   }
 
-  /** Хоёр дахь дүгнэлт (officer.js) on new Автомат шалгалт cases, one at a time, within the
-   *  month's cap. It adds a line to the case's text and keeps the answer in extra.officer; the
-   *  verdict stays the person's. */
+  /** Хоёр дахь дүгнэлт (officer.js) on Автомат шалгалт cases and fuel drops (alert keys or
+   *  ids), one at a time, within the month's cap. It adds a line to the case's text, keeps the
+   *  answer in extra.officer and, when the officer is sure enough and nobody has marked the alert
+   *  yet, saves its verdict and note as the officer's (a person's click replaces it). */
   async secondOpinions(keys) {
+    this.officerAsked ??= new Set();
     for (const key of keys) {
-      const id = this.db.alertIdByKey(key);
+      const id = typeof key === 'number' ? key : this.db.alertIdByKey(key);
       const row = id && this.db.getAlert(id);
       if (!row) continue;
       const x = parseExtra(row.extra) || {};
-      if (x.officer) continue;
+      if ((x.officer && x.officer.verdict !== undefined) || this.officerAsked.has(id)) continue;
+      if (x.officer && row.verdict) continue; // an older opinion and a person's verdict: nothing to add
       const month = new Date(Date.now() + this.tzOffsetMin * MIN).toISOString().slice(0, 7);
       const cKey = `${AUTOCHECK_KEY}:officer:${month}`;
       const used = Number(this.db.getSetting(cKey, 0)) || 0;
@@ -1912,6 +1965,7 @@ export class Engine {
         return;
       }
       this.db.setSetting(cKey, used + 1);
+      this.officerAsked.add(id); // asked once per alert (until a restart), even if the call fails
       const imei = row.imei;
       const cal = this.vehicleCal(imei);
       const from = (row.from_t ?? row.fromT ?? row.t) - 12 * HOUR;
@@ -1920,9 +1974,22 @@ export class Engine {
       const days = new Set([from, row.t, to].map((t) => new Date(t + this.tzOffsetMin * MIN).toISOString().slice(0, 10)));
       const receipts = this.receiptResultsCached().filter((r) => r.imei === imei && days.has(r.date))
         .map((r) => ({ date: r.date, time: r.time ?? null, litres: r.litres, status: r.status ?? null, room: r.room ?? null }));
+      // a fuel drop: what the meter check says, and the litres it confirms
+      let meter = null;
+      if (row.type === 'fuel_drain') {
+        try {
+          const m = this.meterFor(row);
+          meter = m && { verdict: m.verdict, unit: m.unit, lost: m.lost ?? null, before: m.before?.v ?? null, after: m.after?.v ?? null };
+        } catch (e) {
+          log('error', `Meter check of alert ${id} failed:`, e);
+        }
+      }
+      const lostL = row.type === 'fuel_drain'
+        ? (meter && CONFIRMS.has(meter.verdict) && meter.unit === 'L' && Number.isFinite(meter.lost) ? meter.lost : null)
+        : x.lostL ?? null;
       const o = await (this.secondOpinionFn || secondOpinion)({
-        name: this.recs.get(imei)?.v.name ?? imei, title: row.title, detail: row.detail, rule: x.rule, lostL: x.lostL ?? null,
-        facts: x.facts ?? null, norm: x.facts?.norm ?? null, receipts,
+        name: this.recs.get(imei)?.v.name ?? imei, title: mnTitle(row.title), detail: withoutOpinion(mnDetail(row.detail)), rule: x.rule ?? row.type, lostL,
+        facts: x.facts ?? null, norm: x.facts?.norm ?? null, receipts, meter, examples: this.officerExamples(imei),
         line: meterLine(rows, (mv) => litersAt(mv, cal), this.tzOffsetMin),
       });
       if (!o || o.error) {
@@ -1931,10 +1998,21 @@ export class Engine {
       }
       const now = this.db.getAlert(id);
       if (!now) continue;
-      this.db.updateAlert(id, { detail: `${now.detail || ''}${opinionText(o)}`, extra: JSON.stringify({ ...(parseExtra(now.extra) || {}), officer: o }) });
+      this.db.updateAlert(id, { detail: `${withoutOpinion(now.detail)}${opinionText(o)}`, extra: JSON.stringify({ ...(parseExtra(now.extra) || {}), officer: o }) });
+      // the officer's verdict: only when it is sure enough, and only on an alert nobody has marked
+      let marked = '';
+      if ((o.verdict === 'confirmed' || o.verdict === 'false_alarm') && o.confidence >= OFFICER_VERDICT_MIN) {
+        const cur = this.db.getAlert(id);
+        if (cur && !cur.verdict) {
+          this.db.setReview(id, o.verdict, cur.note || o.note || null, Date.now(), 'officer');
+          this.summaryCache.clear();
+          if (LEDGER_TYPES.includes(cur.type)) this.ledger?.touch('review');
+          marked = `, marked ${o.verdict}`;
+        }
+      }
       this.alertsChangedForSummary();
       this.hub?.broadcast('alert', this.alertView(this.db.getAlert(id)));
-      log('info', `Second opinion on ${row.title} (${imei}): ${o.label}, ${o.confidence} %`);
+      log('info', `Second opinion on ${row.title} (${imei}): ${o.label}, ${o.confidence} %${marked}`);
     }
   }
 

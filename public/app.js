@@ -191,6 +191,7 @@ function normAlert(a) {
   o.ongoing = !!a.ongoing;
   o.verdict = VERDICTS[a.verdict] ? a.verdict : 'unchecked';
   o.note = typeof a.note === 'string' ? a.note : '';
+  o.reviewedBy = a.reviewedBy === 'officer' ? 'officer' : a.reviewedBy === 'person' ? 'person' : null;
   return o;
 }
 const hasProblem = (v) => v.activeAlerts.critical > 0 || v.activeAlerts.warning > 0 || (v.hasFuel && v.fuel?.sensorOk === false);
@@ -1085,9 +1086,11 @@ const BASE_KEY = 'fuel_map_base';
 function addBaseLayers(map, position = 'topright') {
   let cur = 'map';
   try { if (localStorage.getItem(BASE_KEY) === 'satellite') cur = 'satellite'; } catch { /* private window */ }
-  const nat = { maxZoom: 19, maxNativeZoom: 18 };
+  // Esri has photos down to about zoom 16 over the Gobi; past that it serves grey "Map data not yet
+  // available" tiles, so zoom 17+ enlarges the zoom-16 photo instead.
+  const nat = { maxZoom: 19, maxNativeZoom: 16 };
   const layers = {
-    map: L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }),
+    map: L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR, keepBuffer: 4 }),
     satellite: L.layerGroup([
       L.tileLayer(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`, { ...nat, attribution: 'Esri, Maxar, Earthstar Geographics' }),
       L.tileLayer(`${ESRI}/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}`, { ...nat, opacity: 0.7 }),
@@ -1130,7 +1133,8 @@ function ensureMap() {
     setHTML(err, emptyState('map', 'Газрын зургийг ачаалж чадсангүй', 'Газрын зургийг ачаалахад интернэт холболт шаардлагатай. Бусад бүх зүйл интернэтгүй ажиллана.'));
     return false;
   }
-  mapObj = L.map('map', { zoomControl: true, worldCopyJump: false }).setView([46.8, 103.8], 5);
+  // canvas draws hundreds of trail lines and dots far faster than one SVG element each
+  mapObj = L.map('map', { zoomControl: true, worldCopyJump: false, preferCanvas: true }).setView([46.8, 103.8], 5);
   addBaseLayers(mapObj, 'topleft');
   S.trailLayer = L.layerGroup().addTo(mapObj);
   if (S.map.trail) setTimeout(() => loadTrails(), 0);
@@ -1323,9 +1327,21 @@ function drawTrails(shown = null) {
     const on = !sel || sel === imei;
     const pts = (t.pts || []).map((p) => [p[1], p[2]]);
     if (pts.length > 1) {
-      L.polyline(pts, { color: c, weight: sel === imei ? 5 : 3, opacity: on ? 0.85 : 0.18 })
-        .bindTooltip(esc(`${name} · ${fmtNum(t.km)} км · ${fmtTime(t.pts[0][0], now())}-с хойш`), { sticky: true })
+      // road stretches solid; a stretch after a GPS silence (p[3] = 1) dashed and thin: the truck
+      // went from A to B but the path between is unknown
+      const roads = [[]];
+      const gaps = [];
+      (t.pts || []).forEach((p, i) => {
+        if (p[3] && i > 0) { gaps.push([pts[i - 1], pts[i]]); roads.push([]); }
+        roads[roads.length - 1].push(pts[i]);
+      });
+      const tip = esc(`${name} · ${fmtNum(t.km)} км · ${fmtTime(t.pts[0][0], now())}-с хойш`);
+      L.polyline(roads.filter((r) => r.length > 1), { color: c, weight: sel === imei ? 5 : 3, opacity: on ? 0.85 : 0.18 })
+        .bindTooltip(tip, { sticky: true })
         .on('click', () => selectOnMap(imei, false))
+        .addTo(S.trailLayer);
+      if (gaps.length) L.polyline(gaps, { color: c, weight: 2, dashArray: '4 8', opacity: on ? 0.7 : 0.15 })
+        .bindTooltip(esc(`${name}: GPS мэдээгүй хэсэг`), { sticky: true })
         .addTo(S.trailLayer);
       L.circleMarker(pts[0], { radius: 5, color: c, weight: 2, fillColor: cssVar('--surface'), opacity: on ? 1 : 0.25, fillOpacity: on ? 1 : 0.25 })
         .bindTooltip(esc(`${name}: эхэлсэн ${fmtFull(t.pts[0][0])}`))
@@ -1541,7 +1557,8 @@ function alertItem(a, { compact = false } = {}) {
         ${compact ? '' : html`<b class="al-veh">${aName(a)}</b>`}
         <span class="al-title">${a.title || ti.label}</span>
         ${a.ongoing ? html`<span class="tag ongoing">Үргэлжилж байна</span>` : ''}
-        ${a.type === 'fuel_drain' && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span>` : ''}
+        ${(a.type === 'fuel_drain' || a.type === 'auto_check') && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span>` : ''}
+        ${officerMark(a)}
         ${a.historical ? html`<span class="tag hist" title="Өмнөх мэдээллийг нөхөх үед олдсон — мэдэгдэл илгээгээгүй.">Түүх</span>` : ''}
         ${isNew ? html`<span class="tag new">Шинэ</span>` : ''}
       </div>
@@ -1560,6 +1577,12 @@ function alertItem(a, { compact = false } = {}) {
       : html`<button type="button" class="btn small js-ack" data-id="${a.id}" title="Танилцсан гэж тэмдэглэх">${icon('check')}<span class="hide-sm">Танилцлаа</span></button>`}
       ${S.mode !== 'cloud' && isTheft(a) ? html`<a class="btn small al-ev" href="${evidenceUrl([a.id])}" target="_blank" rel="noopener" title="Энэ тохиолдлын нотлох баримтын хуудсыг хэвлэхээр нээх">${icon('evidence')}<span class="hide-sm">Нотлох баримт</span></a>` : ''}</div>
   </article>`;
+}
+/** "Автомат шалгалт" next to a verdict the officer gave (a person's click replaces it). */
+function officerMark(a) {
+  return a.reviewedBy === 'officer' && a.verdict !== 'unchecked'
+    ? html`<span class="tag hist" title="Автомат шалгалт шийдсэн. Та өөр товч дарвал таны дүгнэлтээр солигдоно.">Автомат шалгалт</span>`
+    : '';
 }
 /** Verdict buttons (fuel drains) and a note field on refuel / fuel drain alerts; both are saved
  *  on the server and written to the Excel fuel ledger. */
@@ -1855,7 +1878,7 @@ function renderEvidence() {
             <td>${a.title || typeLabel(a.type)}</td>
             <td class="e-meter ${ok ? 'm-ok' : 'm-no'}">${meterText(a.meter) || html`<span class="muted">—</span>`}</td>
             <td class="num nowrap rc-bad"><b>${litresText(L)}</b></td>
-            <td>${a.type === 'fuel_drain' && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span>` : html`<span class="muted">${a.type === 'fuel_drain' ? 'Шалгаагүй' : '—'}</span>`}</td>
+            <td>${a.type === 'fuel_drain' && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span> ${officerMark(a)}` : html`<span class="muted">${a.type === 'fuel_drain' ? 'Шалгаагүй' : '—'}</span>`}</td>
             <td class="hide-sm e-note">${a.note}</td>
             <td class="nowrap"><a class="btn small" href="${evidenceUrl([a.id])}" target="_blank" rel="noopener" title="Зөвхөн энэ тохиолдлын хуудсыг нээх">${icon('evidence')}<span class="hide-sm">Хуудас</span></a></td>
           </tr>`;
@@ -2691,7 +2714,7 @@ function initDetailMap() {
   const el = $('#d-map');
   if (!d) return;
   if (!window.L) { el.classList.add('no-map'); el.textContent = 'Газрын зураг байхгүй (газрын зургийг ачаалах интернэт холболт алга).'; return; }
-  d.map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true }).setView([46.8, 103.8], 5);
+  d.map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true, preferCanvas: true }).setView([46.8, 103.8], 5);
   addBaseLayers(d.map);
   d.placesLayer = L.layerGroup().addTo(d.map);
   drawPlaces(d.placesLayer);

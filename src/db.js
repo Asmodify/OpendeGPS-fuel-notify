@@ -70,6 +70,7 @@ const ALERT_COLUMNS = [
   ['verdict', 'TEXT'], // null = unchecked | 'confirmed' | 'false_alarm'
   ['note', 'TEXT'],
   ['reviewed_at', 'INTEGER'],
+  ['reviewed_by', 'TEXT'], // who gave the verdict: null = a person | 'officer' = Автомат шалгалт
 ];
 
 /** Alert types that make up the fuel ledger: kept forever, written to the Excel file. */
@@ -132,7 +133,7 @@ export class Store {
       pruneAlerts: p(`DELETE FROM alerts WHERE t < ? AND type NOT IN (${LEDGER_TYPES.map((x) => `'${x}'`).join(', ')})`),
       ledgerAlerts: p(`SELECT * FROM alerts WHERE type IN (${LEDGER_TYPES.map((x) => `'${x}'`).join(', ')})
         ORDER BY t DESC, id DESC`),
-      setReview: p('UPDATE alerts SET verdict = ?, note = ?, reviewed_at = ?, updated_at = ? WHERE id = ?'),
+      setReview: p('UPDATE alerts SET verdict = ?, note = ?, reviewed_at = ?, reviewed_by = ?, updated_at = ? WHERE id = ?'),
       firstSampleEver: p('SELECT MIN(t) AS t FROM samples'),
       getMeta: p('SELECT v FROM meta WHERE k = ?'),
       setMeta: p('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v'),
@@ -378,9 +379,10 @@ export class Store {
     return this.st.ongoing.all(imei, type);
   }
 
-  /** Owner's review: verdict null (unchecked) | 'confirmed' | 'false_alarm', note text or null. */
-  setReview(id, verdict, note, now = Date.now()) {
-    return Number(this.st.setReview.run(verdict ?? null, note ?? null, now, now, id).changes) > 0;
+  /** Review: verdict null (unchecked) | 'confirmed' | 'false_alarm', note text or null; by null
+   *  (a person) or 'officer' (Автомат шалгалт gave it; a person's later verdict replaces it). */
+  setReview(id, verdict, note, now = Date.now(), by = null) {
+    return Number(this.st.setReview.run(verdict ?? null, note ?? null, now, by ?? null, now, id).changes) > 0;
   }
 
   /** Every refuel and fuel_drain alert ever stored, newest first (the fuel ledger). */
