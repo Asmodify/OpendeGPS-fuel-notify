@@ -251,12 +251,13 @@ export class MemDb {
     return [...this.alerts.values()].filter((a) => a.ongoing && a.imei === imei && a.type === type).map((a) => ({ ...a }));
   }
 
-  setReview(id, verdict, note, now = Date.now()) {
+  setReview(id, verdict, note, now = Date.now(), by = null) {
     const row = this.alerts.get(Number(id));
     if (!row) return false;
     row.verdict = verdict ?? null;
     row.note = note ?? null;
     row.reviewed_at = now;
+    row.reviewed_by = by ?? null; // not stored in the cloud database (the officer runs on the server only)
     row.updated_at = now;
     this.out.alertReviews.add(row.id);
     return true;

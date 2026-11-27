@@ -191,6 +191,7 @@ function normAlert(a) {
   o.ongoing = !!a.ongoing;
   o.verdict = VERDICTS[a.verdict] ? a.verdict : 'unchecked';
   o.note = typeof a.note === 'string' ? a.note : '';
+  o.reviewedBy = a.reviewedBy === 'officer' ? 'officer' : a.reviewedBy === 'person' ? 'person' : null;
   return o;
 }
 const hasProblem = (v) => v.activeAlerts.critical > 0 || v.activeAlerts.warning > 0 || (v.hasFuel && v.fuel?.sensorOk === false);
@@ -1556,7 +1557,8 @@ function alertItem(a, { compact = false } = {}) {
         ${compact ? '' : html`<b class="al-veh">${aName(a)}</b>`}
         <span class="al-title">${a.title || ti.label}</span>
         ${a.ongoing ? html`<span class="tag ongoing">Үргэлжилж байна</span>` : ''}
-        ${a.type === 'fuel_drain' && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span>` : ''}
+        ${(a.type === 'fuel_drain' || a.type === 'auto_check') && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span>` : ''}
+        ${officerMark(a)}
         ${a.historical ? html`<span class="tag hist" title="Өмнөх мэдээллийг нөхөх үед олдсон — мэдэгдэл илгээгээгүй.">Түүх</span>` : ''}
         ${isNew ? html`<span class="tag new">Шинэ</span>` : ''}
       </div>
@@ -1575,6 +1577,12 @@ function alertItem(a, { compact = false } = {}) {
       : html`<button type="button" class="btn small js-ack" data-id="${a.id}" title="Танилцсан гэж тэмдэглэх">${icon('check')}<span class="hide-sm">Танилцлаа</span></button>`}
       ${S.mode !== 'cloud' && isTheft(a) ? html`<a class="btn small al-ev" href="${evidenceUrl([a.id])}" target="_blank" rel="noopener" title="Энэ тохиолдлын нотлох баримтын хуудсыг хэвлэхээр нээх">${icon('evidence')}<span class="hide-sm">Нотлох баримт</span></a>` : ''}</div>
   </article>`;
+}
+/** "Автомат шалгалт" next to a verdict the officer gave (a person's click replaces it). */
+function officerMark(a) {
+  return a.reviewedBy === 'officer' && a.verdict !== 'unchecked'
+    ? html`<span class="tag hist" title="Автомат шалгалт шийдсэн. Та өөр товч дарвал таны дүгнэлтээр солигдоно.">Автомат шалгалт</span>`
+    : '';
 }
 /** Verdict buttons (fuel drains) and a note field on refuel / fuel drain alerts; both are saved
  *  on the server and written to the Excel fuel ledger. */
@@ -1870,7 +1878,7 @@ function renderEvidence() {
             <td>${a.title || typeLabel(a.type)}</td>
             <td class="e-meter ${ok ? 'm-ok' : 'm-no'}">${meterText(a.meter) || html`<span class="muted">—</span>`}</td>
             <td class="num nowrap rc-bad"><b>${litresText(L)}</b></td>
-            <td>${a.type === 'fuel_drain' && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span>` : html`<span class="muted">${a.type === 'fuel_drain' ? 'Шалгаагүй' : '—'}</span>`}</td>
+            <td>${a.type === 'fuel_drain' && a.verdict !== 'unchecked' ? html`<span class="tag verdict v-${a.verdict}">${VERDICTS[a.verdict]}</span> ${officerMark(a)}` : html`<span class="muted">${a.type === 'fuel_drain' ? 'Шалгаагүй' : '—'}</span>`}</td>
             <td class="hide-sm e-note">${a.note}</td>
             <td class="nowrap"><a class="btn small" href="${evidenceUrl([a.id])}" target="_blank" rel="noopener" title="Зөвхөн энэ тохиолдлын хуудсыг нээх">${icon('evidence')}<span class="hide-sm">Хуудас</span></a></td>
           </tr>`;

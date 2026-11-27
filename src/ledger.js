@@ -603,7 +603,7 @@ export function buildLedger({ alerts = [], vehicles = [], calibrations = {}, tzO
     thefts.push([
       start, row.t, name, group, cancelled && verdict !== 'confirmed' ? null : L, litres(fromMv), litres(toMv), situationMn(row),
       row.from_t !== null && row.from_t !== undefined ? Math.max(0, Math.round((row.t - row.from_t) / MIN)) : null,
-      mapLink(row.lat, row.lng), VERDICT_LABEL[verdict] || VERDICT_LABEL.unchecked, row.note || null,
+      mapLink(row.lat, row.lng), `${VERDICT_LABEL[verdict] || VERDICT_LABEL.unchecked}${verdict !== 'unchecked' && row.reviewed_by === 'officer' ? ' (Автомат шалгалт)' : ''}`, row.note || null,
       pending ? PENDING : cancelled ? CANCELLED : row.ongoing ? 'Үргэлжилж байна' : 'Хаагдсан', mv === null ? null : Math.round(mv), imei, mnDetail(row.detail) || '', row.id,
     ]);
   }
